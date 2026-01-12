@@ -68,6 +68,7 @@ import Hydra.Model.Payment (CardanoSigningKey (..))
 import Hydra.Network (Network (..))
 import Hydra.Network.Message (Message (..))
 import Hydra.Node (DraftHydraNode (..), HydraNode (..), NodeStateHandler (..), connect, mkNetworkInput)
+import Hydra.Options (defaultTxTTL)
 import Hydra.Node.Environment (Environment (Environment, participants, party))
 import Hydra.Node.InputQueue (InputQueue (..))
 import Hydra.Node.State (NodeState (..))
@@ -378,7 +379,7 @@ createMockNetwork draftNode nodes =
     mapM_ (`handleMessage` msg) allNodes
 
   handleMessage HydraNode{inputQueue} msg = do
-    enqueue inputQueue $ mkNetworkInput sender msg
+    enqueue inputQueue $ mkNetworkInput defaultTxTTL sender msg
 
   sender = getParty draftNode
 

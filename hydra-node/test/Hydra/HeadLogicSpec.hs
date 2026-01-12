@@ -46,7 +46,7 @@ import Hydra.Node (mkNetworkInput)
 import Hydra.Node.DepositPeriod (toNominalDiffTime)
 import Hydra.Node.Environment (Environment (..))
 import Hydra.Node.State (Deposit (..), DepositStatus (Active), NodeState (..), initNodeState)
-import Hydra.Options (defaultContestationPeriod, defaultDepositPeriod)
+import Hydra.Options (defaultContestationPeriod, defaultDepositPeriod, defaultTxTTL)
 import Hydra.Prelude qualified as Prelude
 import Hydra.Tx (HeadId)
 import Hydra.Tx.ContestationPeriod qualified as CP
@@ -1369,7 +1369,7 @@ receiveMessage = receiveMessageFrom alice
 -- | Create a network input about a received protocol message with default ttl
 -- from given sender.
 receiveMessageFrom :: Party -> Message tx -> Input tx
-receiveMessageFrom = mkNetworkInput
+receiveMessageFrom = mkNetworkInput defaultTxTTL
 
 -- | Create a chain effect with fixed chain state and slot.
 chainEffect :: PostChainTx SimpleTx -> Effect SimpleTx

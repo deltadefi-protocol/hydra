@@ -48,7 +48,6 @@ import Hydra.Node (
   NodeStateHandler (..),
   connect,
   createNodeStateHandler,
-  defaultTxTTL,
   mkNetworkInput,
   queryNodeState,
   runHydraNode,
@@ -60,7 +59,7 @@ import Hydra.Node.Environment (Environment (..))
 import Hydra.Node.InputQueue (InputQueue (enqueue), createInputQueue)
 import Hydra.Node.State (NodeState (..), initNodeState)
 import Hydra.NodeSpec (createMockEventStore)
-import Hydra.Options (defaultContestationPeriod, defaultDepositPeriod)
+import Hydra.Options (defaultContestationPeriod, defaultDepositPeriod, defaultTxTTL)
 import Hydra.Tx (HeadId)
 import Hydra.Tx.ContestationPeriod (ContestationPeriod)
 import Hydra.Tx.ContestationPeriod qualified as CP
@@ -1199,7 +1198,7 @@ createMockNetwork node nodes =
     mapM_ (`handleMessage` msg) allNodes
 
   handleMessage HydraNode{inputQueue} msg =
-    enqueue inputQueue $ mkNetworkInput sender msg
+    enqueue inputQueue $ mkNetworkInput defaultTxTTL sender msg
 
   sender = getParty node
 
