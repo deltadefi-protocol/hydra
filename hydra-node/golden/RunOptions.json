@@ -70,6 +70,7 @@
             "persistenceRotateAfter": null,
             "tlsCertPath": null,
             "tlsKeyPath": "c/b/a/a/b/a.key",
+            "txTTL": 5,
             "verbosity": {
                 "contents": "HydraNode",
                 "tag": "Verbose"
@@ -129,6 +130,7 @@
             "persistenceRotateAfter": 30,
             "tlsCertPath": null,
             "tlsKeyPath": "b/a/b/a.key",
+            "txTTL": 5,
             "verbosity": {
                 "contents": "HydraNode",
                 "tag": "Verbose"
@@ -214,6 +216,7 @@
             "persistenceRotateAfter": 16,
             "tlsCertPath": "a/a/b/c/b/b.pem",
             "tlsKeyPath": null,
+            "txTTL": 5,
             "verbosity": {
                 "tag": "Quiet"
             },
@@ -251,6 +254,7 @@
             "persistenceRotateAfter": 0,
             "tlsCertPath": "a/b/c/b/b/a.pem",
             "tlsKeyPath": "b/c/a/b.key",
+            "txTTL": 5,
             "verbosity": {
                 "contents": "HydraNode",
                 "tag": "Verbose"
@@ -324,6 +328,7 @@
             "persistenceRotateAfter": 13,
             "tlsCertPath": "c/a.pem",
             "tlsKeyPath": "c.key",
+            "txTTL": 5,
             "verbosity": {
                 "contents": "HydraNode",
                 "tag": "Verbose"
