@@ -235,23 +235,23 @@ wireClientInput node = enqueue . ClientInput
  where
   DraftHydraNode{inputQueue = InputQueue{enqueue}} = node
 
-wireNetworkInput :: DraftHydraNode tx m -> NetworkCallback (Authenticated (Message tx)) m
-wireNetworkInput node =
+wireNetworkInput :: TTL -> DraftHydraNode tx m -> NetworkCallback (Authenticated (Message tx)) m
+wireNetworkInput txTTL node =
   NetworkCallback
     { deliver = \Authenticated{party = sender, payload = msg} ->
-        enqueue $ mkNetworkInput sender msg
+        enqueue $ mkNetworkInput txTTL sender msg
     , onConnectivity =
         enqueue . NetworkInput 1 . ConnectivityEvent
     }
  where
   DraftHydraNode{inputQueue = InputQueue{enqueue}} = node
 
--- | Create a network input with corresponding default ttl from given sender.
-mkNetworkInput :: Party -> Message tx -> Input tx
-mkNetworkInput sender msg =
+-- | Create a network input with corresponding ttl from given sender.
+mkNetworkInput :: TTL -> Party -> Message tx -> Input tx
+mkNetworkInput txTTL sender msg =
   case msg of
-    ReqTx{} -> NetworkInput defaultTxTTL $ ReceivedMessage{sender, msg}
-    ReqDec{} -> NetworkInput defaultTxTTL $ ReceivedMessage{sender, msg}
+    ReqTx{} -> NetworkInput txTTL $ ReceivedMessage{sender, msg}
+    ReqDec{} -> NetworkInput txTTL $ ReceivedMessage{sender, msg}
     _ -> NetworkInput defaultTTL $ ReceivedMessage{sender, msg}
 
 -- | Connect chain, network and API to a hydrated 'DraftHydraNode' to get a fully
@@ -333,11 +333,6 @@ stepHydraNode node = do
 -- outcome.
 defaultTTL :: TTL
 defaultTTL = 6000
-
--- | The maximum number of times to re-enqueue 'ReqTx' and 'ReqDec' network
--- messages upon 'Wait'.
-defaultTxTTL :: TTL
-defaultTxTTL = 5
 
 -- | The time to wait between re-enqueuing a 'Wait' outcome.
 waitDelay :: DiffTime

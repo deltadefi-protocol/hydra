@@ -40,6 +40,7 @@ import Hydra.Ledger.Cardano ()
 import Hydra.Logging (Verbosity (..))
 import Hydra.Network (Host (..), NodeId (NodeId), PortNumber, WhichEtcd (..), readHost, readPort, showHost)
 import Hydra.NetworkVersions (hydraNodeVersion, parseNetworkTxIds)
+import Hydra.HeadLogic.Input (TTL)
 import Hydra.Node.ApiTransactionTimeout (ApiTransactionTimeout (..))
 import Hydra.Node.DepositPeriod (DepositPeriod (..))
 import Hydra.Tx.ContestationPeriod (ContestationPeriod, fromNominalDiffTime)
@@ -216,6 +217,7 @@ data RunOptions = RunOptions
   , ledgerConfig :: LedgerConfig
   , whichEtcd :: WhichEtcd
   , apiTransactionTimeout :: ApiTransactionTimeout
+  , txTTL :: TTL
   }
   deriving stock (Eq, Show, Generic)
   deriving anyclass (ToJSON, FromJSON)
@@ -252,6 +254,7 @@ instance Arbitrary RunOptions where
     ledgerConfig <- arbitrary
     whichEtcd <- arbitrary
     apiTransactionTimeout <- arbitrary
+    txTTL <- arbitrary
     pure $
       RunOptions
         { verbosity
@@ -272,6 +275,7 @@ instance Arbitrary RunOptions where
         , ledgerConfig
         , whichEtcd
         , apiTransactionTimeout
+        , txTTL
         }
 
   shrink = genericShrink
@@ -298,6 +302,7 @@ defaultRunOptions =
     , ledgerConfig = defaultLedgerConfig
     , whichEtcd = EmbeddedEtcd
     , apiTransactionTimeout = 300
+    , txTTL = 5
     }
  where
   localhost = IPv4 $ toIPv4 [127, 0, 0, 1]
@@ -324,6 +329,7 @@ runOptionsParser =
     <*> ledgerConfigParser
     <*> whichEtcdParser
     <*> apiTransactionTimeoutParser
+    <*> txTTLParser
 
 whichEtcdParser :: Parser WhichEtcd
 whichEtcdParser =
@@ -816,6 +822,23 @@ apiTransactionTimeoutParser =
           \takes longer than this, it will be cancelled."
     )
 
+defaultTxTTL :: TTL
+defaultTxTTL = 5
+
+txTTLParser :: Parser TTL
+txTTLParser =
+  option
+    auto
+    ( long "tx-ttl"
+        <> metavar "COUNT"
+        <> value defaultTxTTL
+        <> showDefault
+        <> help
+          "Number of times to retry applying a transaction before marking it \
+          \as invalid. Higher values are recommended for batched or chained \
+          \transactions. Each retry is delayed by 100ms."
+    )
+
 startChainFromParser :: Parser ChainPoint
 startChainFromParser =
   option
@@ -1038,6 +1061,7 @@ toArgs
     , ledgerConfig
     , whichEtcd
     , apiTransactionTimeout
+    , txTTL
     } =
     isVerbose verbosity
       <> ["--node-id", unpack nId]
@@ -1057,6 +1081,7 @@ toArgs
       <> argsChainConfig chainConfig
       <> argsLedgerConfig
       <> ["--api-transaction-timeout", show apiTransactionTimeout]
+      <> ["--tx-ttl", show txTTL]
    where
     (NodeId nId) = nodeId
 

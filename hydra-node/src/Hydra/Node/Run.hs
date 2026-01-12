@@ -120,7 +120,7 @@ run opts = do
             withNetwork
               (contramap Network tracer)
               networkConfiguration
-              (wireNetworkInput wetHydraNode)
+              (wireNetworkInput txTTL wetHydraNode)
               $ \network -> do
                 -- Main loop
                 connect chain network server wetHydraNode
@@ -172,6 +172,7 @@ run opts = do
     , tlsKeyPath
     , whichEtcd
     , apiTransactionTimeout
+    , txTTL
     } = opts
 
 getGlobalsForChain :: ChainConfig -> IO Globals
