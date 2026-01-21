@@ -698,15 +698,15 @@ onOpenNetworkAckSn Environment{party} pendingDeposits openState otherParty snaps
           RequireFailed $
             InvalidMultisignature{multisig = show multisig, vkeys}
 
-  maybeRequestNextSnapshot previous outcome = do
+  maybeRequestNextSnapshot (previous :: Snapshot tx) outcome = do
     let nextSn = previous.number + 1
         -- Clear if just processed (prevents stale reference after IC/ID)
         nextDepositTxId =
-          if isJust previous.utxoToCommit
+          if isJust (previous.utxoToCommit :: Maybe (UTxOType tx))
             then Nothing
             else currentDepositTxId
         nextDecommitTx =
-          if isJust previous.utxoToDecommit
+          if isJust (previous.utxoToDecommit :: Maybe (UTxOType tx))
             then Nothing
             else decommitTx
         -- Pick active deposit if available
@@ -1116,7 +1116,7 @@ getNextActiveDeposit deposits =
   let isActive (_, Deposit{deposited, status}) = deposited /= mempty && status == Active
    in case filter isActive (Map.toList deposits) of
         [] -> Nothing
-        xs -> Just $ fst $ minimumBy (comparing ((.created) . snd)) xs
+        xs -> Just $ fst $ minimumBy (comparing (\(_, Deposit{created}) -> created)) xs
 
 -- ** Closing the Head
 
