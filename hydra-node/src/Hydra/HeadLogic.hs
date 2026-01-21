@@ -702,11 +702,11 @@ onOpenNetworkAckSn Environment{party} pendingDeposits openState otherParty snaps
     let nextSn = previous.number + 1
         -- Clear if just processed (prevents stale reference after IC/ID)
         nextDepositTxId =
-          if isJust (utxoToCommit previous)
+          if isJust previous.utxoToCommit
             then Nothing
             else currentDepositTxId
         nextDecommitTx =
-          if isJust (utxoToDecommit previous)
+          if isJust previous.utxoToDecommit
             then Nothing
             else decommitTx
         -- Pick active deposit if available
@@ -1116,7 +1116,7 @@ getNextActiveDeposit deposits =
   let isActive (_, Deposit{deposited, status}) = deposited /= mempty && status == Active
    in case filter isActive (Map.toList deposits) of
         [] -> Nothing
-        xs -> Just $ fst $ minimumBy (comparing (created . snd)) xs
+        xs -> Just $ fst $ minimumBy (comparing ((.created) . snd)) xs
 
 -- ** Closing the Head
 
