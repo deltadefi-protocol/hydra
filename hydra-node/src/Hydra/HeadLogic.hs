@@ -461,6 +461,14 @@ onOpenNetworkReqSn env ledger pendingDeposits currentSlot st otherParty sv sn re
                       , newCurrentDepositTxId = mDepositTxId
                       }
  where
+  -- Allow version-1 only if ReqSn has no IC/ID content (safe stale request)
+  -- This handles the race condition where ReqSn is sent before L1 tx confirms
+  -- but processed after the version bump.
+  allowStaleVersion =
+    sv == version - 1
+      && isNothing mDecommitTx
+      && isNothing mDepositTxId
+
   requireReqSn continue
     | sv /= version && not allowStaleVersion =
         Error $ RequireFailed $ ReqSvNumberInvalid{requestedSv = sv, lastSeenSv = version}
@@ -470,12 +478,6 @@ onOpenNetworkReqSn env ledger pendingDeposits currentSlot st otherParty sv sn re
         Error $ RequireFailed $ ReqSnNotLeader{requestedSn = sn, leader = otherParty}
     | otherwise =
         continue
-   where
-    -- Allow version-1 only if ReqSn has no IC/ID content (safe stale request)
-    allowStaleVersion =
-      sv == version - 1
-        && isNothing mDecommitTx
-        && isNothing mDepositTxId
 
   waitNoSnapshotInFlight continue
     | confSn == seenSn =
@@ -485,6 +487,8 @@ onOpenNetworkReqSn env ledger pendingDeposits currentSlot st otherParty sv sn re
 
   waitOnSnapshotVersion continue
     | version == sv =
+        continue
+    | allowStaleVersion =
         continue
     | otherwise =
         wait $ WaitOnSnapshotVersion sv
