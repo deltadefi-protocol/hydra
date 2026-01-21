@@ -47,7 +47,7 @@ import Test.QuickCheck.Instances.Time ()
 
 -- | Hardcoded limit for commit tx on mainnet
 maxMainnetLovelace :: Coin
-maxMainnetLovelace = Coin 100_000_000
+maxMainnetLovelace = Coin 1_000_000_000
 
 -- | Hardcoded limit for maximum number of parties in a head protocol The value
 -- is obtained from calculating the costs of running the scripts and on-chan
