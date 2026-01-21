@@ -462,7 +462,7 @@ onOpenNetworkReqSn env ledger pendingDeposits currentSlot st otherParty sv sn re
                       }
  where
   requireReqSn continue
-    | sv /= version =
+    | sv /= version && not allowStaleVersion =
         Error $ RequireFailed $ ReqSvNumberInvalid{requestedSv = sv, lastSeenSv = version}
     | sn /= seenSn + 1 =
         Error $ RequireFailed $ ReqSnNumberInvalid{requestedSn = sn, lastSeenSn = seenSn}
@@ -470,6 +470,12 @@ onOpenNetworkReqSn env ledger pendingDeposits currentSlot st otherParty sv sn re
         Error $ RequireFailed $ ReqSnNotLeader{requestedSn = sn, leader = otherParty}
     | otherwise =
         continue
+   where
+    -- Allow version-1 only if ReqSn has no IC/ID content (safe stale request)
+    allowStaleVersion =
+      sv == version - 1
+        && isNothing mDecommitTx
+        && isNothing mDepositTxId
 
   waitNoSnapshotInFlight continue
     | confSn == seenSn =
@@ -690,11 +696,30 @@ onOpenNetworkAckSn Environment{party} pendingDeposits openState otherParty snaps
 
   maybeRequestNextSnapshot previous outcome = do
     let nextSn = previous.number + 1
-    if isLeader parameters party nextSn && not (null localTxs)
+        -- Clear if just processed (prevents stale reference after IC/ID)
+        nextDepositTxId =
+          if isJust (utxoToCommit previous)
+            then Nothing
+            else currentDepositTxId
+        nextDecommitTx =
+          if isJust (utxoToDecommit previous)
+            then Nothing
+            else decommitTx
+        -- Pick active deposit if available
+        depositToInclude =
+          if isNothing nextDepositTxId && isNothing nextDecommitTx
+            then getNextActiveDeposit pendingDeposits
+            else nextDepositTxId
+        -- Trigger on ANY pending work (fixes P1, P2)
+        hasPendingWork =
+          not (null localTxs)
+            || isJust nextDecommitTx
+            || isJust depositToInclude
+    if isLeader parameters party nextSn && hasPendingWork
       then
         outcome
           <> newState SnapshotRequestDecided{snapshotNumber = nextSn}
-          <> cause (NetworkEffect $ ReqSn version nextSn (txId <$> localTxs) decommitTx currentDepositTxId)
+          <> cause (NetworkEffect $ ReqSn version nextSn (txId <$> localTxs) nextDecommitTx depositToInclude)
       else outcome
 
   maybePostIncrementTx snapshot@Snapshot{utxoToCommit} signatures outcome =
@@ -1079,6 +1104,15 @@ isLeader HeadParameters{parties} p sn =
   case p `elemIndex` parties of
     Just i -> ((fromIntegral sn - 1) `mod` length parties) == i
     _ -> False
+
+-- | Get the next active deposit to include in a snapshot request.
+-- Deposits are selected in arrival order (FIFO) based on creation time.
+getNextActiveDeposit :: (Eq (UTxOType tx), Monoid (UTxOType tx), Ord (TxIdType tx)) => PendingDeposits tx -> Maybe (TxIdType tx)
+getNextActiveDeposit deposits =
+  let isActive (_, Deposit{deposited, status}) = deposited /= mempty && status == Active
+   in case filter isActive (Map.toList deposits) of
+        [] -> Nothing
+        xs -> Just $ fst $ minimumBy (comparing (created . snd)) xs
 
 -- ** Closing the Head
 
