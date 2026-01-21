@@ -1678,6 +1678,7 @@ aggregate st = \case
                       , localTxs = mempty
                       , allTxs = mempty
                       , seenSnapshot = NoSeenSnapshot
+                      , currentDepositTxId = Nothing
                       }
                   ConfirmedSnapshot{snapshot = Snapshot{utxo}} ->
                     coordinatedHeadState
@@ -1685,6 +1686,7 @@ aggregate st = \case
                       , localTxs = mempty
                       , allTxs = mempty
                       , seenSnapshot = LastSeenSnapshot snapshotNumber
+                      , currentDepositTxId = Nothing
                       }
             }
       _otherState -> st
