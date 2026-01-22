@@ -1725,19 +1725,21 @@ aggregate st = \case
                       , currentDepositTxId = Nothing
                       }
                   ConfirmedSnapshot{snapshot = Snapshot{utxo, utxoToCommit, version = snapshotVersion}} ->
-                    let -- If current version > snapshot version, commit was finalized on L1
-                        -- Include utxoToCommit in localUTxO since the UTxO is now in the head
-                        committedUTxO =
-                          if version > snapshotVersion
-                            then fromMaybe mempty utxoToCommit
-                            else mempty
-                     in coordinatedHeadState
-                          { localUTxO = utxo <> committedUTxO
-                          , localTxs = mempty
-                          , allTxs = mempty
-                          , seenSnapshot = LastSeenSnapshot snapshotNumber
-                          , currentDepositTxId = Nothing
-                          }
+                    let
+                      -- If current version > snapshot version, commit was finalized on L1
+                      -- Include utxoToCommit in localUTxO since the UTxO is now in the head
+                      committedUTxO =
+                        if version > snapshotVersion
+                          then fromMaybe mempty utxoToCommit
+                          else mempty
+                     in
+                      coordinatedHeadState
+                        { localUTxO = utxo <> committedUTxO
+                        , localTxs = mempty
+                        , allTxs = mempty
+                        , seenSnapshot = LastSeenSnapshot snapshotNumber
+                        , currentDepositTxId = Nothing
+                        }
             }
       _otherState -> st
   DepositRecorded{} -> st
