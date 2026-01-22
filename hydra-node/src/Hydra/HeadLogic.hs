@@ -1698,10 +1698,16 @@ aggregate st = \case
                         , signatures
                         }
                   , seenSnapshot = LastSeenSnapshot number
+                  , -- Clear decommitTx after a snapshot with utxoToDecommit is confirmed
+                    -- to prevent re-including the same decommit in subsequent snapshots
+                    decommitTx =
+                      if isJust snapshotUtxoToDecommit
+                        then Nothing
+                        else coordinatedHeadState.decommitTx
                   }
             }
        where
-        Snapshot{number} = snapshot
+        Snapshot{number, utxoToDecommit = snapshotUtxoToDecommit} = snapshot
       _otherState -> st
   LocalStateCleared{snapshotNumber} ->
     case st of
