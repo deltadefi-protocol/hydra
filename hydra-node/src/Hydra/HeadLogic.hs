@@ -1737,6 +1737,7 @@ aggregate st = \case
                       , allTxs = mempty
                       , seenSnapshot = NoSeenSnapshot
                       , currentDepositTxId = Nothing
+                      , decommitTx = Nothing
                       }
                   ConfirmedSnapshot{snapshot = Snapshot{utxo, utxoToCommit, version = snapshotVersion}} ->
                     let
@@ -1753,6 +1754,7 @@ aggregate st = \case
                         , allTxs = mempty
                         , seenSnapshot = LastSeenSnapshot snapshotNumber
                         , currentDepositTxId = Nothing
+                        , decommitTx = Nothing
                         }
             }
       _otherState -> st
