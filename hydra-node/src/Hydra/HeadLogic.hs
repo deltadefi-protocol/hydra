@@ -461,13 +461,16 @@ onOpenNetworkReqSn env ledger pendingDeposits currentSlot st otherParty sv sn re
                       , newCurrentDepositTxId = mDepositTxId
                       }
  where
-  -- Allow version-1 only if ReqSn has no IC/ID content (safe stale request)
-  -- This handles the race condition where ReqSn is sent before L1 tx confirms
-  -- but processed after the version bump.
+  -- Allow version-1 only if ReqSn has no IC/ID content OR if the IC/ID was
+  -- already finalized. This handles the race condition where ReqSn is sent
+  -- before L1 tx confirms but processed after the version bump.
+  --
+  -- For deposits: check if not in pendingDeposits (removed by CommitFinalized)
+  -- For decommits: check isNothing (cleared in SnapshotConfirmed before DecommitFinalized)
   allowStaleVersion =
     sv == version - 1
       && isNothing mDecommitTx
-      && isNothing mDepositTxId
+      && maybe True (`Map.notMember` pendingDeposits) mDepositTxId
 
   requireReqSn continue
     | sv /= version && not allowStaleVersion =
@@ -505,7 +508,12 @@ onOpenNetworkReqSn env ledger pendingDeposits currentSlot st otherParty sv sn re
         -- XXX: We may need to wait quite long here and this makes losing
         -- the 'ReqSn' due to a restart (fail-recovery) quite likely
         case Map.lookup depositTxId pendingDeposits of
-          Nothing -> wait WaitOnDepositObserved{depositTxId}
+          Nothing
+            -- If deposit not found and this is a stale version request,
+            -- the deposit was already finalized. Continue without waiting
+            -- as the UTxO is already in localUTxO via CommitFinalized.
+            | sv == version - 1 -> cont (activeUTxOAfterDecommit, Nothing)
+            | otherwise -> wait WaitOnDepositObserved{depositTxId}
           Just Deposit{status, deposited}
             | status == Inactive -> wait WaitOnDepositActivation{depositTxId}
             | status == Expired -> Error $ RequireFailed RequestedDepositExpired{depositTxId}
@@ -1704,10 +1712,16 @@ aggregate st = \case
                       if isJust snapshotUtxoToDecommit
                         then Nothing
                         else coordinatedHeadState.decommitTx
+                  , -- Clear currentDepositTxId after a snapshot with utxoToCommit is confirmed
+                    -- to prevent re-including the same deposit in subsequent snapshots
+                    currentDepositTxId =
+                      if isJust snapshotUtxoToCommit
+                        then Nothing
+                        else coordinatedHeadState.currentDepositTxId
                   }
             }
        where
-        Snapshot{number, utxoToDecommit = snapshotUtxoToDecommit} = snapshot
+        Snapshot{number, utxoToCommit = snapshotUtxoToCommit, utxoToDecommit = snapshotUtxoToDecommit} = snapshot
       _otherState -> st
   LocalStateCleared{snapshotNumber} ->
     case st of
