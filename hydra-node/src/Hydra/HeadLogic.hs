@@ -461,8 +461,19 @@ onOpenNetworkReqSn env ledger pendingDeposits currentSlot st otherParty sv sn re
                       , newCurrentDepositTxId = mDepositTxId
                       }
  where
+  -- Allow version-1 only if ReqSn has no IC/ID content OR if the IC/ID was
+  -- already finalized. This handles the race condition where ReqSn is sent
+  -- before L1 tx confirms but processed after the version bump.
+  --
+  -- For deposits: check if not in pendingDeposits (removed by CommitFinalized)
+  -- For decommits: check isNothing (cleared in SnapshotConfirmed before DecommitFinalized)
+  allowStaleVersion =
+    sv == version - 1
+      && isNothing mDecommitTx
+      && maybe True (`Map.notMember` pendingDeposits) mDepositTxId
+
   requireReqSn continue
-    | sv /= version =
+    | sv /= version && not allowStaleVersion =
         Error $ RequireFailed $ ReqSvNumberInvalid{requestedSv = sv, lastSeenSv = version}
     | sn /= seenSn + 1 =
         Error $ RequireFailed $ ReqSnNumberInvalid{requestedSn = sn, lastSeenSn = seenSn}
@@ -480,6 +491,8 @@ onOpenNetworkReqSn env ledger pendingDeposits currentSlot st otherParty sv sn re
   waitOnSnapshotVersion continue
     | version == sv =
         continue
+    | allowStaleVersion =
+        continue
     | otherwise =
         wait $ WaitOnSnapshotVersion sv
 
@@ -495,7 +508,12 @@ onOpenNetworkReqSn env ledger pendingDeposits currentSlot st otherParty sv sn re
         -- XXX: We may need to wait quite long here and this makes losing
         -- the 'ReqSn' due to a restart (fail-recovery) quite likely
         case Map.lookup depositTxId pendingDeposits of
-          Nothing -> wait WaitOnDepositObserved{depositTxId}
+          Nothing
+            -- If deposit not found and this is a stale version request,
+            -- the deposit was already finalized. Continue without waiting
+            -- as the UTxO is already in localUTxO via CommitFinalized.
+            | sv == version - 1 -> cont (activeUTxOAfterDecommit, Nothing)
+            | otherwise -> wait WaitOnDepositObserved{depositTxId}
           Just Deposit{status, deposited}
             | status == Inactive -> wait WaitOnDepositActivation{depositTxId}
             | status == Expired -> Error $ RequireFailed RequestedDepositExpired{depositTxId}
@@ -688,13 +706,32 @@ onOpenNetworkAckSn Environment{party} pendingDeposits openState otherParty snaps
           RequireFailed $
             InvalidMultisignature{multisig = show multisig, vkeys}
 
-  maybeRequestNextSnapshot previous outcome = do
+  maybeRequestNextSnapshot (previous :: Snapshot tx) outcome = do
     let nextSn = previous.number + 1
-    if isLeader parameters party nextSn && not (null localTxs)
+        -- Clear if just processed (prevents stale reference after IC/ID)
+        nextDepositTxId =
+          if isJust (previous.utxoToCommit :: Maybe (UTxOType tx))
+            then Nothing
+            else currentDepositTxId
+        nextDecommitTx =
+          if isJust (previous.utxoToDecommit :: Maybe (UTxOType tx))
+            then Nothing
+            else decommitTx
+        -- Pick active deposit if available
+        depositToInclude =
+          if isNothing nextDepositTxId && isNothing nextDecommitTx
+            then getNextActiveDeposit pendingDeposits
+            else nextDepositTxId
+        -- Trigger on ANY pending work (fixes P1, P2)
+        hasPendingWork =
+          not (null localTxs)
+            || isJust nextDecommitTx
+            || isJust depositToInclude
+    if isLeader parameters party nextSn && hasPendingWork
       then
         outcome
           <> newState SnapshotRequestDecided{snapshotNumber = nextSn}
-          <> cause (NetworkEffect $ ReqSn version nextSn (txId <$> localTxs) decommitTx currentDepositTxId)
+          <> cause (NetworkEffect $ ReqSn version nextSn (txId <$> localTxs) nextDecommitTx depositToInclude)
       else outcome
 
   maybePostIncrementTx snapshot@Snapshot{utxoToCommit} signatures outcome =
@@ -1079,6 +1116,15 @@ isLeader HeadParameters{parties} p sn =
   case p `elemIndex` parties of
     Just i -> ((fromIntegral sn - 1) `mod` length parties) == i
     _ -> False
+
+-- | Get the next active deposit to include in a snapshot request.
+-- Deposits are selected in arrival order (FIFO) based on creation time.
+getNextActiveDeposit :: (Eq (UTxOType tx), Monoid (UTxOType tx), Ord (TxIdType tx)) => PendingDeposits tx -> Maybe (TxIdType tx)
+getNextActiveDeposit deposits =
+  let isActive (_, Deposit{deposited, status}) = deposited /= mempty && status == Active
+   in case filter isActive (Map.toList deposits) of
+        [] -> Nothing
+        xs -> Just $ fst $ minimumBy (comparing (\(_, Deposit{created}) -> created)) xs
 
 -- ** Closing the Head
 
@@ -1660,14 +1706,26 @@ aggregate st = \case
                         , signatures
                         }
                   , seenSnapshot = LastSeenSnapshot number
+                  , -- Clear decommitTx after a snapshot with utxoToDecommit is confirmed
+                    -- to prevent re-including the same decommit in subsequent snapshots
+                    decommitTx =
+                      if isJust snapshotUtxoToDecommit
+                        then Nothing
+                        else coordinatedHeadState.decommitTx
+                  , -- Clear currentDepositTxId after a snapshot with utxoToCommit is confirmed
+                    -- to prevent re-including the same deposit in subsequent snapshots
+                    currentDepositTxId =
+                      if isJust snapshotUtxoToCommit
+                        then Nothing
+                        else coordinatedHeadState.currentDepositTxId
                   }
             }
        where
-        Snapshot{number} = snapshot
+        Snapshot{number, utxoToCommit = snapshotUtxoToCommit, utxoToDecommit = snapshotUtxoToDecommit} = snapshot
       _otherState -> st
   LocalStateCleared{snapshotNumber} ->
     case st of
-      Open os@OpenState{coordinatedHeadState = coordinatedHeadState@CoordinatedHeadState{confirmedSnapshot}} ->
+      Open os@OpenState{coordinatedHeadState = coordinatedHeadState@CoordinatedHeadState{confirmedSnapshot, version}} ->
         Open
           os
             { coordinatedHeadState =
@@ -1678,14 +1736,26 @@ aggregate st = \case
                       , localTxs = mempty
                       , allTxs = mempty
                       , seenSnapshot = NoSeenSnapshot
+                      , currentDepositTxId = Nothing
+                      , decommitTx = Nothing
                       }
-                  ConfirmedSnapshot{snapshot = Snapshot{utxo}} ->
-                    coordinatedHeadState
-                      { localUTxO = utxo
-                      , localTxs = mempty
-                      , allTxs = mempty
-                      , seenSnapshot = LastSeenSnapshot snapshotNumber
-                      }
+                  ConfirmedSnapshot{snapshot = Snapshot{utxo, utxoToCommit, version = snapshotVersion}} ->
+                    let
+                      -- If current version > snapshot version, commit was finalized on L1
+                      -- Include utxoToCommit in localUTxO since the UTxO is now in the head
+                      committedUTxO =
+                        if version > snapshotVersion
+                          then fromMaybe mempty utxoToCommit
+                          else mempty
+                     in
+                      coordinatedHeadState
+                        { localUTxO = utxo <> committedUTxO
+                        , localTxs = mempty
+                        , allTxs = mempty
+                        , seenSnapshot = LastSeenSnapshot snapshotNumber
+                        , currentDepositTxId = Nothing
+                        , decommitTx = Nothing
+                        }
             }
       _otherState -> st
   DepositRecorded{} -> st

@@ -92,7 +92,6 @@ Please follow our [Contributing Guidelines](./CONTRIBUTING.md) and [Code of Cond
 ## 🙏 Credits
 
 - Logo created by Alexander Wende
-
 ---
 
 <p align="center">
