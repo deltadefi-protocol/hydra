@@ -243,7 +243,7 @@ receiveMessageFrom :: Party -> Message tx -> Input tx
 chainEffect :: PostChainTx SimpleTx -> Effect SimpleTx
 
 -- | Create an observation chain input with chain state at given slot.
-observeTxAtSlot :: Natural -> OnChainTx SimpleTx -> Input SimpleTx
+observeTxAtSlot :: ChainSlot -> OnChainTx SimpleTx -> Input SimpleTx
 
 -- | Create an observation chain input with fixed chain state and slot.
 observeTx :: OnChainTx SimpleTx -> Input SimpleTx
@@ -464,7 +464,7 @@ spec :: Spec
 --   <a>Tick</a> is enqueued to advance the chain slot and ensure the
 --   <a>NodeState</a> is in sync. This is returning the node to allow for
 --   chaining with <a>runToCompletion</a>.
-primeWith :: (MonadSTM m, MonadTime m) => [Input tx] -> HydraNode tx m -> m (HydraNode tx m)
+primeWith :: (MonadSTM m, MonadTime m) => [Input SimpleTx] -> HydraNode SimpleTx m -> m (HydraNode SimpleTx m)
 
 -- | Convert a <a>DraftHydraNode</a> to a <a>HydraNode</a> by providing
 --   mock implementations.
@@ -640,7 +640,7 @@ createMockNetwork :: MonadSTM m => DraftHydraNode tx m -> TVar m [HydraNode tx m
 -- | Derive an <a>OnChainTx</a> from <a>PostChainTx</a> to simulate a
 --   "perfect" chain. NOTE: This implementation announces hard-coded
 --   contestationDeadlines. Also, all heads will have the same
---   <a>OpenState</a> and <a>OpenState</a>.
+--   <a>InitialState</a> and <a>InitialState</a>.
 toOnChainTx :: IsTx tx => UTCTime -> PostChainTx tx -> OnChainTx tx
 newDeadlineFarEnoughFromNow :: MonadTime m => m UTCTime
 nothingHappensFor :: (MonadTimer m, MonadThrow m, IsChainState tx) => TestHydraClient tx m -> NominalDiffTime -> m ()
