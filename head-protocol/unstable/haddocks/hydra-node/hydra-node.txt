@@ -1711,6 +1711,8 @@ SnapshotDoesNotApply :: SnapshotNumber -> TxIdType tx -> ValidationError -> Requ
 NoMatchingDeposit :: RequirementFailure tx
 RequestedDepositExpired :: TxIdType tx -> RequirementFailure tx
 [$sel:depositTxId:ReqSnNumberInvalid] :: RequirementFailure tx -> TxIdType tx
+RequestedDepositNotFoundLocally :: TxIdType tx -> RequirementFailure tx
+[$sel:depositTxId:ReqSnNumberInvalid] :: RequirementFailure tx -> TxIdType tx
 data SideLoadRequirementFailure tx
 SideLoadInitialSnapshotMismatch :: SideLoadRequirementFailure tx
 SideLoadSnNumberInvalid :: SnapshotNumber -> SnapshotNumber -> SideLoadRequirementFailure tx
@@ -2912,7 +2914,7 @@ onOpenClientNewTx :: tx -> Outcome tx
 --   including this transaction if needed.
 --   
 --   <b>Transition</b>: <a>OpenState</a> → <a>OpenState</a>
-onOpenNetworkReqTx :: IsTx tx => Environment -> Ledger tx -> ChainSlot -> OpenState tx -> TTL -> tx -> Outcome tx
+onOpenNetworkReqTx :: IsTx tx => Environment -> Ledger tx -> ChainSlot -> OpenState tx -> TTL -> PendingDeposits tx -> tx -> Outcome tx
 
 -- | Process a snapshot request (<a>ReqSn</a>) from party.
 --   
@@ -3001,6 +3003,18 @@ onOpenChainIncrementTx :: OpenState tx -> ChainStateType tx -> SnapshotVersion -
 --   
 --   <b>Transition</b>: <a>OpenState</a> → <a>OpenState</a>
 onOpenChainDecrementTx :: OpenState tx -> ChainStateType tx -> SnapshotVersion -> UTxOType tx -> Outcome tx
+
+-- | On rollback, re-post the IncrementTx if there is a pending deposit
+--   whose confirmed snapshot contains a matching utxoToCommit. The
+--   rollback may have erased the original on-chain IncrementTx
+--   observation.
+maybeRepostIncrementTx :: IsTx tx => HeadId -> HeadParameters -> PendingDeposits tx -> Maybe (TxIdType tx) -> ConfirmedSnapshot tx -> Outcome tx
+
+-- | On rollback, re-post the DecrementTx if there is a pending decommit
+--   whose confirmed snapshot contains a matching utxoToDecommit. The
+--   rollback may have erased the original on-chain DecrementTx
+--   observation.
+maybeRepostDecrementTx :: IsTx tx => HeadId -> HeadParameters -> Maybe tx -> ConfirmedSnapshot tx -> Outcome tx
 
 -- | Client request to close the head. This leads to a close transaction on
 --   chain using the latest confirmed snaphshot of the <a>OpenState</a>.
@@ -3124,6 +3138,8 @@ SnapshotDoesNotApply :: SnapshotNumber -> TxIdType tx -> ValidationError -> Requ
 [$sel:error:ReqSnNumberInvalid] :: RequirementFailure tx -> ValidationError
 NoMatchingDeposit :: RequirementFailure tx
 RequestedDepositExpired :: TxIdType tx -> RequirementFailure tx
+[$sel:depositTxId:ReqSnNumberInvalid] :: RequirementFailure tx -> TxIdType tx
+RequestedDepositNotFoundLocally :: TxIdType tx -> RequirementFailure tx
 [$sel:depositTxId:ReqSnNumberInvalid] :: RequirementFailure tx -> TxIdType tx
 data SideLoadRequirementFailure tx
 SideLoadInitialSnapshotMismatch :: SideLoadRequirementFailure tx
