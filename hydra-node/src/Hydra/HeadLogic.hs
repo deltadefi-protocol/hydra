@@ -1263,29 +1263,35 @@ onOpenClientSideLoadSnapshot openState requestedConfirmedSnapshot =
     , utxoToDecommit = requestedSd
     } = getSnapshot requestedConfirmedSnapshot
 
+  clientInput = SideLoadSnapshot requestedConfirmedSnapshot
+
+  sideLoadFailed requirementFailure =
+    cause . ClientEffect $
+      ServerOutput.SideLoadSnapshotRejected{clientInput, requirementFailure}
+
   requireVerifiedSameSnapshot cont =
     if requestedSnapshot == currentSnapshot
       then cont
-      else Error . SideLoadSnapshotFailed $ SideLoadInitialSnapshotMismatch
+      else sideLoadFailed SideLoadInitialSnapshotMismatch
 
   requireVerifiedSnapshotNumber cont =
     if requestedSn >= lastSeenSn
       then cont
-      else Error . SideLoadSnapshotFailed $ SideLoadSnNumberInvalid{requestedSn, lastSeenSn}
+      else sideLoadFailed SideLoadSnNumberInvalid{requestedSn, lastSeenSn}
 
   requireVerifiedL1Snapshot cont
-    | requestedSv /= lastSeenSv = Error . SideLoadSnapshotFailed $ SideLoadSvNumberInvalid{requestedSv, lastSeenSv}
-    | requestedSc /= lastSeenSc = Error . SideLoadSnapshotFailed $ SideLoadUTxOToCommitInvalid{requestedSc, lastSeenSc}
-    | requestedSd /= lastSeenSd = Error . SideLoadSnapshotFailed $ SideLoadUTxOToDecommitInvalid{requestedSd, lastSeenSd}
+    | requestedSv /= lastSeenSv = sideLoadFailed SideLoadSvNumberInvalid{requestedSv, lastSeenSv}
+    | requestedSc /= lastSeenSc = sideLoadFailed SideLoadUTxOToCommitInvalid{requestedSc, lastSeenSc}
+    | requestedSd /= lastSeenSd = sideLoadFailed SideLoadUTxOToDecommitInvalid{requestedSd, lastSeenSd}
     | otherwise = cont
 
   requireVerifiedMultisignature snapshot signatories cont =
     case verifyMultiSignature vkeys signatories snapshot of
       Verified -> cont
       FailedKeys failures ->
-        Error . SideLoadSnapshotFailed $ SideLoadInvalidMultisignature{multisig = show signatories, vkeys = failures}
+        sideLoadFailed SideLoadInvalidMultisignature{multisig = show signatories, vkeys = failures}
       KeyNumberMismatch ->
-        Error . SideLoadSnapshotFailed $ SideLoadInvalidMultisignature{multisig = show signatories, vkeys}
+        sideLoadFailed SideLoadInvalidMultisignature{multisig = show signatories, vkeys}
 
 -- | Observe a contest transaction. If the contested snapshot number is smaller
 -- than our last confirmed snapshot, we post a contest transaction.
@@ -1407,6 +1413,26 @@ handleOutOfSync Environment{unsyncedPeriod} now chainTime syncStatus
         CatchingUp -> newState NodeSynced
  where
   plus = flip addUTCTime
+
+-- | Validate whether a current deposit in the local state actually exists
+--   in the map of pending deposits.
+--
+--   * If 'currentDeposit' is 'Nothing', returns 'Nothing'.
+--   * If 'currentDeposit' is @'Just' txId@ and @txId@ is present in 'pendingDeposits',
+--     returns the original 'currentDeposit'.
+--   * Otherwise, returns 'Nothing'.
+--
+--   This is typically used to confirm that a local deposit that is to be
+--   requested in 'ReqSn' is indeed still pending and has not been processed or
+--   removed.
+setExistingDeposit :: IsTx tx => PendingDeposits tx -> Maybe (TxIdType tx) -> Maybe (TxIdType tx)
+setExistingDeposit pendingDeposits currentDeposit = do
+  case currentDeposit of
+    Nothing -> Nothing
+    Just depositTxId ->
+      case Map.lookup depositTxId pendingDeposits of
+        Nothing -> Nothing
+        Just _ -> currentDeposit
 
 -- | Handles inputs and converts them into 'StateChanged' events along with
 -- 'Effect's, in case it is processed successfully. Later, the Node will

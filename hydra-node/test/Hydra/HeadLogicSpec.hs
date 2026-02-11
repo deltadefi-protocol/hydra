@@ -22,7 +22,7 @@ import Data.Map (notMember)
 import Data.Map qualified as Map
 import Data.Set qualified as Set
 import Hydra.API.ClientInput (ClientInput (SideLoadSnapshot))
-import Hydra.API.ServerOutput (DecommitInvalidReason (..))
+import Hydra.API.ServerOutput (ClientMessage (..), DecommitInvalidReason (..))
 import Hydra.Cardano.Api (ChainPoint (..), SlotNo (..), fromLedgerTx, mkVkAddress, toLedgerTx, txOutValue, unSlotNo, pattern TxValidityUpperBound)
 import Hydra.Cardano.Api.Gen (genTxIn)
 import Hydra.Chain (
@@ -1279,8 +1279,10 @@ spec =
           getConfirmedSnapshot s0 `shouldBe` Just snapshot0
           let wrongInitialSnapshot = InitialSnapshot testHeadId (utxoRef 2)
           now <- nowFromSlot s0.currentSlot
-          update bobEnv ledger now s0 (ClientInput (SideLoadSnapshot wrongInitialSnapshot))
-            `shouldBe` Error (SideLoadSnapshotFailed SideLoadInitialSnapshotMismatch)
+          let outcome = update bobEnv ledger now s0 (ClientInput (SideLoadSnapshot wrongInitialSnapshot))
+          outcome `hasEffectSatisfying` \case
+            ClientEffect (SideLoadSnapshotRejected{requirementFailure = SideLoadInitialSnapshotMismatch}) -> True
+            _ -> False
           getConfirmedSnapshot s0 `shouldBe` Just snapshot0
 
         prop "ignores side load initial snapshot of another head" $ \otherHeadId -> do
@@ -1342,8 +1344,10 @@ spec =
           getConfirmedSnapshot sideLoadedState `shouldBe` Just snapshot2
 
           now <- nowFromSlot sideLoadedState.currentSlot
-          update bobEnv ledger now sideLoadedState (ClientInput (SideLoadSnapshot $ ConfirmedSnapshot snapshot1 multisig1))
-            `shouldBe` Error (SideLoadSnapshotFailed{sideLoadRequirementFailure = SideLoadSnNumberInvalid 1 2})
+          let outcome = update bobEnv ledger now sideLoadedState (ClientInput (SideLoadSnapshot $ ConfirmedSnapshot snapshot1 multisig1))
+          outcome `hasEffectSatisfying` \case
+            ClientEffect (SideLoadSnapshotRejected{requirementFailure = SideLoadSnNumberInvalid 1 2}) -> True
+            _ -> False
 
         it "reject side load confirmed snapshot because missing signature" $ do
           getConfirmedSnapshot startingState `shouldBe` Just snapshot1
@@ -1352,10 +1356,11 @@ spec =
               multisig2 = aggregate [sign aliceSk snapshot2, sign bobSk snapshot2]
 
           now <- nowFromSlot startingState.currentSlot
-          update bobEnv ledger now startingState (ClientInput (SideLoadSnapshot $ ConfirmedSnapshot snapshot2 multisig2))
-            `shouldSatisfy` \case
-              Error (SideLoadSnapshotFailed SideLoadInvalidMultisignature{vkeys}) -> vkeys == [vkey alice, vkey bob, vkey carol]
-              _ -> False
+          let outcome = update bobEnv ledger now startingState (ClientInput (SideLoadSnapshot $ ConfirmedSnapshot snapshot2 multisig2))
+          outcome `hasEffectSatisfying` \case
+            ClientEffect (SideLoadSnapshotRejected{requirementFailure = SideLoadInvalidMultisignature{vkeys}}) ->
+              vkeys == [vkey alice, vkey bob, vkey carol]
+            _ -> False
 
         it "reject side load confirmed snapshot because wrong snapshot version" $ do
           getConfirmedSnapshot startingState `shouldBe` Just snapshot1
@@ -1364,8 +1369,10 @@ spec =
               multisig2 = aggregate [sign aliceSk snapshot2, sign bobSk snapshot2]
 
           now <- nowFromSlot startingState.currentSlot
-          update bobEnv ledger now startingState (ClientInput (SideLoadSnapshot $ ConfirmedSnapshot snapshot2 multisig2))
-            `shouldBe` Error (SideLoadSnapshotFailed{sideLoadRequirementFailure = SideLoadSvNumberInvalid 1 0})
+          let outcome = update bobEnv ledger now startingState (ClientInput (SideLoadSnapshot $ ConfirmedSnapshot snapshot2 multisig2))
+          outcome `hasEffectSatisfying` \case
+            ClientEffect (SideLoadSnapshotRejected{requirementFailure = SideLoadSvNumberInvalid 1 0}) -> True
+            _ -> False
 
         prop "reject side load confirmed snapshot because wrong snapshot utxoToDecommit" $ \utxoToDecommit -> do
           getConfirmedSnapshot startingState `shouldBe` Just snapshot1
@@ -1373,8 +1380,11 @@ spec =
               multisig2 = aggregate [sign aliceSk snapshot2, sign bobSk snapshot2]
 
           now <- nowFromSlot startingState.currentSlot
-          update bobEnv ledger now startingState (ClientInput (SideLoadSnapshot $ ConfirmedSnapshot snapshot2 multisig2))
-            `shouldBe` Error (SideLoadSnapshotFailed $ SideLoadUTxOToDecommitInvalid (Just utxoToDecommit) Nothing)
+          let outcome = update bobEnv ledger now startingState (ClientInput (SideLoadSnapshot $ ConfirmedSnapshot snapshot2 multisig2))
+          outcome `hasEffectSatisfying` \case
+            ClientEffect (SideLoadSnapshotRejected{requirementFailure = SideLoadUTxOToDecommitInvalid (Just utxoToDecommit') Nothing}) ->
+              utxoToDecommit' == utxoToDecommit
+            _ -> False
 
         prop "reject side load confirmed snapshot because wrong snapshot utxoToCommit" $ \utxoToCommit -> do
           getConfirmedSnapshot startingState `shouldBe` Just snapshot1
@@ -1383,8 +1393,11 @@ spec =
               multisig2 = aggregate [sign aliceSk snapshot2, sign bobSk snapshot2]
 
           now <- nowFromSlot startingState.currentSlot
-          update bobEnv ledger now startingState (ClientInput (SideLoadSnapshot $ ConfirmedSnapshot snapshot2 multisig2))
-            `shouldBe` Error (SideLoadSnapshotFailed $ SideLoadUTxOToCommitInvalid (Just utxoToCommit) Nothing)
+          let outcome = update bobEnv ledger now startingState (ClientInput (SideLoadSnapshot $ ConfirmedSnapshot snapshot2 multisig2))
+          outcome `hasEffectSatisfying` \case
+            ClientEffect (SideLoadSnapshotRejected{requirementFailure = SideLoadUTxOToCommitInvalid (Just utxoToCommit') Nothing}) ->
+              utxoToCommit' == utxoToCommit
+            _ -> False
 
         it "accept side load confirmed snapshot with idempotence" $ do
           getConfirmedSnapshot startingState `shouldBe` Just snapshot1

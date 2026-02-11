@@ -10,6 +10,10 @@ changes.
 
 ## [1.3.0] - UNRELEASED
 
+- Tested with `cardano-node 10.6.1` and `cardano-cli 10.13.1.0`.
+
+- Hydra node now correctly handles deposits and decommits on chain rollbacks and handles its local state correctly in terms of keeping track of pending deposits. [#2491](https://github.com/cardano-scaling/hydra/pull/2491)
+
 - **BREAKING** A Hydra node will now start rejecting both network and client inputs once its view of the chain has been out of sync for more than 50% of the configured `--contestation-period`, based on **system wall-clock time**.
   - Added `NodeUnsynced` and `NodeSynced` state events and server outputs.
   - Added `RejectedInput` client message.
@@ -36,7 +40,8 @@ changes.
   [#2430](https://github.com/cardano-scaling/hydra/pull/2430).
 - Ensure input and etcd-pending-broadcast bounded queue sizes are smaller than the logging queue
   [#2466](https://github.com/cardano-scaling/hydra/pull/2466).
-
+- `POST /snapshot` now returns the specific side-load validation failure instead of timing out [#2462](https://github.com/cardano-scaling/hydra/issues/2462).
+- Fixed the internal wallet fee estimation, which was more often than not using maximum plutus execution units. This reduces costs for initializing, open, etc. of a head by a factor of ~4x [#2473](https://github.com/cardano-scaling/hydra/pull/2473).
 
 ## [1.2.0] - 2025.11.28
 
