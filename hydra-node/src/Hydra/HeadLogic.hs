@@ -330,12 +330,16 @@ onOpenNetworkReqTx env ledger currentSlot st ttl pendingDeposits tx =
   maybeRequestSnapshot nextSn outcome =
     if not snapshotInFlight && isLeader parameters party nextSn
       then
-        outcome
-          -- XXX: This state update has no equivalence in the
-          -- spec. Do we really need to store that we have
-          -- requested a snapshot? If yes, should update spec.
-          <> newState SnapshotRequestDecided{snapshotNumber = nextSn}
-          <> cause (NetworkEffect $ ReqSn version nextSn (txId <$> take maxTxsPerSnapshot localTxs') decommitTx (setExistingDeposit pendingDeposits currentDepositTxId))
+        let existingDeposit = do
+              depositTxId <- currentDepositTxId
+              _ <- Map.lookup depositTxId pendingDeposits
+              currentDepositTxId
+         in outcome
+              -- XXX: This state update has no equivalence in the
+              -- spec. Do we really need to store that we have
+              -- requested a snapshot? If yes, should update spec.
+              <> newState SnapshotRequestDecided{snapshotNumber = nextSn}
+              <> cause (NetworkEffect $ ReqSn version nextSn (txId <$> take maxTxsPerSnapshot localTxs') decommitTx existingDeposit)
       else outcome
 
   Environment{party} = env
@@ -685,9 +689,13 @@ onOpenNetworkAckSn Environment{party} pendingDeposits openState otherParty snaps
     let nextSn = previous.number + 1
     if isLeader parameters party nextSn && not (null localTxs)
       then
-        outcome
-          <> newState SnapshotRequestDecided{snapshotNumber = nextSn}
-          <> cause (NetworkEffect $ ReqSn version nextSn (txId <$> take maxTxsPerSnapshot localTxs) decommitTx (setExistingDeposit pendingDeposits currentDepositTxId))
+        let existingDeposit = do
+              depositTxId <- currentDepositTxId
+              _ <- Map.lookup depositTxId pendingDeposits
+              currentDepositTxId
+         in outcome
+              <> newState SnapshotRequestDecided{snapshotNumber = nextSn}
+              <> cause (NetworkEffect $ ReqSn version nextSn (txId <$> take maxTxsPerSnapshot localTxs) decommitTx existingDeposit)
       else outcome
 
   maybePostIncrementTx snapshot@Snapshot{utxoToCommit} signatures outcome =
@@ -1100,6 +1108,7 @@ maybeRepostIncrementTx headId parameters pendingDeposits mDepositTxId confirmedS
 -- confirmed snapshot contains a matching utxoToDecommit. The rollback may have
 -- erased the original on-chain DecrementTx observation.
 maybeRepostDecrementTx ::
+  IsTx tx =>
   HeadId ->
   HeadParameters ->
   Maybe tx ->
@@ -1717,9 +1726,9 @@ aggregateNodeState nodeState sc =
         DepositExpired{depositTxId, deposit} ->
           nodeState
             { headState = st
-            , -- NB: We keep expired deposits in a map since we actually need it when Recovering.
-              -- There is a corresponding error RequestedDepositExpired which gives users context on stale ReqSn.
-              pendingDeposits = Map.insert depositTxId deposit currentPendingDeposits
+            -- NB: We keep expired deposits in a map since we actually need it when Recovering.
+            -- There is a corresponding error RequestedDepositExpired which gives users context on stale ReqSn.
+            , pendingDeposits = Map.insert depositTxId deposit currentPendingDeposits
             }
         DepositRecovered{depositTxId} ->
           case st of
