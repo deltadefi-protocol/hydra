@@ -1229,7 +1229,7 @@ withTracer :: forall m msg a. (MonadIO m, MonadFork m, MonadTime m, ToJSON msg) 
 -- | Start logging thread acquiring a <a>Tracer</a>, outputting JSON
 --   formatted messages to some <a>Handle</a>. This tracer is wrapping
 --   <tt>msg</tt> into an <a>Envelope</a> with metadata.
-withTracerOutputTo :: forall m msg a. (MonadIO m, MonadFork m, MonadTime m, ToJSON msg) => Handle -> Text -> (Tracer m msg -> IO a) -> IO a
+withTracerOutputTo :: forall m msg a. (MonadIO m, MonadFork m, MonadTime m, ToJSON msg) => BufferMode -> Handle -> Text -> (Tracer m msg -> IO a) -> IO a
 
 -- | Capture logs and output them to stdout when an exception was raised by
 --   the given <tt>action</tt>. This tracer is wrapping <tt>msg</tt> into
@@ -1305,7 +1305,6 @@ newTinyWallet :: Tracer IO TinyWalletLog -> NetworkId -> (VerificationKey Paymen
 --   To determine whether a produced output is ours, we apply the given
 --   function checking the output's address.
 applyTxs :: [Tx] -> (Address -> Bool) -> Map TxIn TxOut -> Map TxIn TxOut
-getTxId :: HashAnnotated (TxBody era) EraIndependentTxBody => AlonzoTx era -> TxId
 
 -- | This are all the error that can happen during coverFee.
 data ErrCoverFee
@@ -2216,6 +2215,9 @@ PostTxOnChainFailed :: PostChainTx tx -> PostTxError tx -> ClientMessage tx
 RejectedInput :: ClientInput tx -> Text -> ClientMessage tx
 [$sel:clientInput:CommandFailed] :: ClientMessage tx -> ClientInput tx
 [$sel:reason:CommandFailed] :: ClientMessage tx -> Text
+SideLoadSnapshotRejected :: ClientInput tx -> SideLoadRequirementFailure tx -> ClientMessage tx
+[$sel:clientInput:CommandFailed] :: ClientMessage tx -> ClientInput tx
+[$sel:requirementFailure:CommandFailed] :: ClientMessage tx -> SideLoadRequirementFailure tx
 
 -- | A friendly welcome message which tells a client something about the
 --   node. Currently used for knowing what signing key the server uses (it
@@ -3067,6 +3069,23 @@ onClosedChainFanoutTx :: ClosedState tx -> ChainStateType tx -> UTxOType tx -> O
 -- | Detect our view of the chain going out of sync and issue a
 --   <a>NodeUnsynced</a> event when this is the case.
 handleOutOfSync :: Environment -> UTCTime -> UTCTime -> SyncedStatus -> Outcome tx
+
+-- | Validate whether a current deposit in the local state actually exists
+--   in the map of pending deposits.
+--   
+--   <ul>
+--   <li>If <tt>currentDeposit</tt> is <a>Nothing</a>, returns
+--   <a>Nothing</a>.</li>
+--   <li>If <tt>currentDeposit</tt> is <tt><a>Just</a> txId</tt> and
+--   <tt>txId</tt> is present in <a>$sel:pendingDeposits:NodeInSync</a>,
+--   returns the original <tt>currentDeposit</tt>.</li>
+--   <li>Otherwise, returns <a>Nothing</a>.</li>
+--   </ul>
+--   
+--   This is typically used to confirm that a local deposit that is to be
+--   requested in <a>ReqSn</a> is indeed still pending and has not been
+--   processed or removed.
+setExistingDeposit :: IsTx tx => PendingDeposits tx -> Maybe (TxIdType tx) -> Maybe (TxIdType tx)
 updateUnsyncedHead :: IsChainState tx => Environment -> Ledger tx -> UTCTime -> ChainSlot -> PendingDeposits tx -> HeadState tx -> Input tx -> SyncedStatus -> Outcome tx
 updateSyncedHead :: IsChainState tx => Environment -> Ledger tx -> UTCTime -> ChainSlot -> PendingDeposits tx -> HeadState tx -> Input tx -> SyncedStatus -> Outcome tx
 handleChainInput :: IsChainState tx => Environment -> Ledger tx -> UTCTime -> ChainSlot -> PendingDeposits tx -> HeadState tx -> Input tx -> SyncedStatus -> Outcome tx
@@ -3098,6 +3117,23 @@ NetworkInput :: TTL -> NetworkEvent (Message tx) -> Input tx
 ChainInput :: ChainEvent tx -> Input tx
 [$sel:chainEvent:ClientInput] :: Input tx -> ChainEvent tx
 type TTL = Natural
+data SideLoadRequirementFailure tx
+SideLoadInitialSnapshotMismatch :: SideLoadRequirementFailure tx
+SideLoadSnNumberInvalid :: SnapshotNumber -> SnapshotNumber -> SideLoadRequirementFailure tx
+[$sel:requestedSn:SideLoadInitialSnapshotMismatch] :: SideLoadRequirementFailure tx -> SnapshotNumber
+[$sel:lastSeenSn:SideLoadInitialSnapshotMismatch] :: SideLoadRequirementFailure tx -> SnapshotNumber
+SideLoadSvNumberInvalid :: SnapshotVersion -> SnapshotVersion -> SideLoadRequirementFailure tx
+[$sel:requestedSv:SideLoadInitialSnapshotMismatch] :: SideLoadRequirementFailure tx -> SnapshotVersion
+[$sel:lastSeenSv:SideLoadInitialSnapshotMismatch] :: SideLoadRequirementFailure tx -> SnapshotVersion
+SideLoadUTxOToCommitInvalid :: Maybe (UTxOType tx) -> Maybe (UTxOType tx) -> SideLoadRequirementFailure tx
+[$sel:requestedSc:SideLoadInitialSnapshotMismatch] :: SideLoadRequirementFailure tx -> Maybe (UTxOType tx)
+[$sel:lastSeenSc:SideLoadInitialSnapshotMismatch] :: SideLoadRequirementFailure tx -> Maybe (UTxOType tx)
+SideLoadUTxOToDecommitInvalid :: Maybe (UTxOType tx) -> Maybe (UTxOType tx) -> SideLoadRequirementFailure tx
+[$sel:requestedSd:SideLoadInitialSnapshotMismatch] :: SideLoadRequirementFailure tx -> Maybe (UTxOType tx)
+[$sel:lastSeenSd:SideLoadInitialSnapshotMismatch] :: SideLoadRequirementFailure tx -> Maybe (UTxOType tx)
+SideLoadInvalidMultisignature :: Text -> [VerificationKey HydraKey] -> SideLoadRequirementFailure tx
+[$sel:multisig:SideLoadInitialSnapshotMismatch] :: SideLoadRequirementFailure tx -> Text
+[$sel:vkeys:SideLoadInitialSnapshotMismatch] :: SideLoadRequirementFailure tx -> [VerificationKey HydraKey]
 data LogicError tx
 UnhandledInput :: Input tx -> HeadState tx -> LogicError tx
 [$sel:input:UnhandledInput] :: LogicError tx -> Input tx
@@ -3141,23 +3177,6 @@ RequestedDepositExpired :: TxIdType tx -> RequirementFailure tx
 [$sel:depositTxId:ReqSnNumberInvalid] :: RequirementFailure tx -> TxIdType tx
 RequestedDepositNotFoundLocally :: TxIdType tx -> RequirementFailure tx
 [$sel:depositTxId:ReqSnNumberInvalid] :: RequirementFailure tx -> TxIdType tx
-data SideLoadRequirementFailure tx
-SideLoadInitialSnapshotMismatch :: SideLoadRequirementFailure tx
-SideLoadSnNumberInvalid :: SnapshotNumber -> SnapshotNumber -> SideLoadRequirementFailure tx
-[$sel:requestedSn:SideLoadInitialSnapshotMismatch] :: SideLoadRequirementFailure tx -> SnapshotNumber
-[$sel:lastSeenSn:SideLoadInitialSnapshotMismatch] :: SideLoadRequirementFailure tx -> SnapshotNumber
-SideLoadSvNumberInvalid :: SnapshotVersion -> SnapshotVersion -> SideLoadRequirementFailure tx
-[$sel:requestedSv:SideLoadInitialSnapshotMismatch] :: SideLoadRequirementFailure tx -> SnapshotVersion
-[$sel:lastSeenSv:SideLoadInitialSnapshotMismatch] :: SideLoadRequirementFailure tx -> SnapshotVersion
-SideLoadUTxOToCommitInvalid :: Maybe (UTxOType tx) -> Maybe (UTxOType tx) -> SideLoadRequirementFailure tx
-[$sel:requestedSc:SideLoadInitialSnapshotMismatch] :: SideLoadRequirementFailure tx -> Maybe (UTxOType tx)
-[$sel:lastSeenSc:SideLoadInitialSnapshotMismatch] :: SideLoadRequirementFailure tx -> Maybe (UTxOType tx)
-SideLoadUTxOToDecommitInvalid :: Maybe (UTxOType tx) -> Maybe (UTxOType tx) -> SideLoadRequirementFailure tx
-[$sel:requestedSd:SideLoadInitialSnapshotMismatch] :: SideLoadRequirementFailure tx -> Maybe (UTxOType tx)
-[$sel:lastSeenSd:SideLoadInitialSnapshotMismatch] :: SideLoadRequirementFailure tx -> Maybe (UTxOType tx)
-SideLoadInvalidMultisignature :: Text -> [VerificationKey HydraKey] -> SideLoadRequirementFailure tx
-[$sel:multisig:SideLoadInitialSnapshotMismatch] :: SideLoadRequirementFailure tx -> Text
-[$sel:vkeys:SideLoadInitialSnapshotMismatch] :: SideLoadRequirementFailure tx -> [VerificationKey HydraKey]
 
 -- | The main state of the Hydra protocol state machine. It holds both, the
 --   overall protocol state, but also the off-chain
@@ -3849,7 +3868,6 @@ genHydraKeys :: GenerateKeyPair -> IO (Either (FileError ()) ())
 readJsonFileThrow :: (Value -> Parser a) -> FilePath -> IO a
 
 module Hydra.Chain.Offline
-fromShelleyGenesis :: ShelleyGenesis -> GenesisParameters ShelleyEra
 
 -- | Derived <a>HeadId</a> of offline head from a <a>HeadSeed</a>.
 offlineHeadId :: HeadSeed -> HeadId
