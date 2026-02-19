@@ -10,9 +10,13 @@ changes.
 
 ## [1.3.0] - UNRELEASED
 
+- Tested with `cardano-node 10.6.2` and `cardano-cli 10.15.0.0`.
+
+- Hydra node now correctly handles deposits and decommits on chain rollbacks and handles its local state correctly in terms of keeping track of pending deposits. [#2491](https://github.com/cardano-scaling/hydra/pull/2491)
+
 - **BREAKING** A Hydra node will now start rejecting both network and client inputs once its view of the chain has been out of sync for more than 50% of the configured `--contestation-period`, based on **system wall-clock time**.
   - Added `NodeUnsynced` and `NodeSynced` state events and server outputs.
-  - Added `RejectedInput` client message.
+  - Added `RejectedInputBecauseUnsynced` client message.
   - The `Checkpoint` event, and consequently the `EventLogRotated` server output, now carry the different `NodeState` variants: `NodeInSync` or `NodeCatchingUp`.
   - `Greetings` message now also contains the hydra-node synced status to the chain backend.
   - See [Issue #2286](https://github.com/cardano-scaling/hydra/issues/2286) and [PR #2290](https://github.com/cardano-scaling/hydra/pull/2290).
@@ -36,7 +40,15 @@ changes.
   [#2430](https://github.com/cardano-scaling/hydra/pull/2430).
 - Ensure input and etcd-pending-broadcast bounded queue sizes are smaller than the logging queue
   [#2466](https://github.com/cardano-scaling/hydra/pull/2466).
-
+- `POST /snapshot` now returns the specific side-load validation failure instead of timing out [#2462](https://github.com/cardano-scaling/hydra/issues/2462).
+- Fixed the internal wallet fee estimation, which was more often than not using maximum plutus execution units. This reduces costs for initializing, open, etc. of a head by a factor of ~4x [#2473](https://github.com/cardano-scaling/hydra/pull/2473).
+- Fixed another race-condition around incremental commits/decommits [#2500](https://github.com/cardano-scaling/hydra/issues/2500)
+- **BREAKING** Improved reporting of chain synchronization status by exposing the node's chain time and drift.
+  - `NodeSynced` and `NodeUnsynced` state-changed events, and their corresponding server outputs, now include the observed chain time and drift.
+  - `NodeState` now tracks the latest observed chan slot in addition to the chain time (`UTCTime`) and its drift measured in seconds.
+  - The `EventLogRotated` and `Checkpoint` state-changed event schemas have been updated accordingly.
+  - Client inputs rejected in `HeadLogic` (via `RejectedInputBecauseUnsynced`) during catch-up now report how far the node is out of sync (drift).
+  - See [Issue #2393](https://github.com/cardano-scaling/hydra/issues/2393).
 
 ## [1.2.0] - 2025.11.28
 

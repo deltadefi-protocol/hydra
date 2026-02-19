@@ -12,6 +12,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Hydra.API.ClientInput (ClientInput)
 import Hydra.Chain (PostChainTx, PostTxError)
 import Hydra.Chain.ChainState (ChainSlot, IsChainState)
+import Hydra.HeadLogic.Error (SideLoadRequirementFailure)
 import Hydra.HeadLogic.State (ClosedState (..), HeadState (..), InitialState (..), OpenState (..), SeenSnapshot (..))
 import Hydra.HeadLogic.State qualified as HeadState
 import Hydra.Ledger (ValidationError)
@@ -66,7 +67,8 @@ instance (FromJSON (TxIdType tx), FromJSON (UTxOType tx)) => FromJSON (DecommitI
 data ClientMessage tx
   = CommandFailed {clientInput :: ClientInput tx, state :: HeadState tx}
   | PostTxOnChainFailed {postChainTx :: PostChainTx tx, postTxError :: PostTxError tx}
-  | RejectedInput {clientInput :: ClientInput tx, reason :: Text}
+  | RejectedInputBecauseUnsynced {clientInput :: ClientInput tx, drift :: NominalDiffTime}
+  | SideLoadSnapshotRejected {clientInput :: ClientInput tx, requirementFailure :: SideLoadRequirementFailure tx}
   deriving (Eq, Show, Generic)
 
 instance IsChainState tx => ToJSON (ClientMessage tx) where
@@ -202,8 +204,8 @@ data ServerOutput tx
     -- Any signing round has been discarded, and the snapshot leader has changed accordingly.
     SnapshotSideLoaded {headId :: HeadId, snapshotNumber :: SnapshotNumber}
   | EventLogRotated {checkpoint :: NodeState tx}
-  | NodeUnsynced
-  | NodeSynced
+  | NodeUnsynced {chainSlot :: ChainSlot, chainTime :: UTCTime, drift :: NominalDiffTime}
+  | NodeSynced {chainSlot :: ChainSlot, chainTime :: UTCTime, drift :: NominalDiffTime}
   deriving stock (Generic)
 
 deriving stock instance IsChainState tx => Eq (ServerOutput tx)

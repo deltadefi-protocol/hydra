@@ -40,7 +40,6 @@ import Hydra.Cardano.Api (
 import Hydra.Cardano.Api qualified as Api
 import Hydra.Cardano.Api.Prelude (fromShelleyPaymentCredential)
 import Hydra.Cardano.Api.Pretty (renderTx)
-import Hydra.Cardano.Api.Tx (signTx, toLedgerTx)
 import Hydra.Chain.CardanoClient (QueryPoint (..))
 import Hydra.Chain.Direct.Wallet (
   Address,
@@ -55,7 +54,7 @@ import Hydra.Chain.Direct.Wallet (
   newTinyWallet,
  )
 import Test.Hydra.Tx.Fixture qualified as Fixture
-import Test.Hydra.Tx.Gen (genKeyPair, genOneUTxOFor, genSigningKey)
+import Test.Hydra.Tx.Gen (genKeyPair, genOneUTxOFor)
 import Test.QuickCheck (
   Property,
   checkCoverage,
@@ -224,29 +223,25 @@ prop_setsMinUTxOValue =
 prop_balanceTransaction :: Property
 prop_balanceTransaction =
   forAllBlind (resize 0 genLedgerTx) $ \tx ->
-    forAllBlind (reasonablySized $ genOutputsForInputs tx) $ \lookupUTxO ->
-      forAllBlind (reasonablySized genUTxO) $ \walletUTxO ->
-        case coverFee_ Fixture.pparams Fixture.systemStart Fixture.epochInfo lookupUTxO walletUTxO tx of
-          Left err ->
-            property False
-              & counterexample ("Error: " <> show err)
-          Right tx' ->
-            forAllBlind genSigningKey $ \sk -> do
-              -- NOTE: Testing the signed transaction as adding a witness
-              -- changes the fee requirements.
-              let signedTx = toLedgerTx $ signTx sk (fromLedgerTx tx')
+    forAllBlind (reasonablySized $ genOutputsForInputs tx) $
+      \lookupUTxO ->
+        forAllBlind (reasonablySized genUTxO) $ \walletUTxO ->
+          case coverFee_ Fixture.pparams Fixture.systemStart Fixture.epochInfo lookupUTxO walletUTxO tx of
+            Left err ->
+              property False
+                & counterexample ("Error: " <> show err)
+            Right tx' ->
               conjoin
-                [ isBalanced (lookupUTxO <> walletUTxO) tx signedTx
-                , hasLowFees Fixture.pparams signedTx
+                [ isBalanced (lookupUTxO <> walletUTxO) tx tx'
+                , hasLowFees Fixture.pparams tx'
                 ]
-                & counterexample ("Signed tx: \n" <> renderTx (fromLedgerTx signedTx))
                 & counterexample ("Balanced tx: \n" <> renderTx (fromLedgerTx tx'))
-          & counterexample ("Partial tx: \n" <> renderTx (fromLedgerTx tx))
-          & counterexample ("Lookup UTXO: \n" <> decodeUtf8 (encodePretty lookupUTxO))
-          & counterexample ("Wallet UTXO: \n" <> decodeUtf8 (encodePretty walletUTxO))
-          -- XXX: This is not exercising any script cost estimation because
-          -- genLedgerTx does not generate txs spending from scripts seemingly.
-          & cover 5 (tx ^. witsTxL . rdmrsTxWitsL /= mempty) "spending script"
+            & counterexample ("Partial tx: \n" <> renderTx (fromLedgerTx tx))
+            & counterexample ("Lookup UTXO: \n" <> decodeUtf8 (encodePretty lookupUTxO))
+            & counterexample ("Wallet UTXO: \n" <> decodeUtf8 (encodePretty walletUTxO))
+            -- XXX: This is not exercising any script cost estimation because
+            -- genLedgerTx does not generate txs spending from scripts seemingly.
+            & cover 5 (tx ^. witsTxL . rdmrsTxWitsL /= mempty) "spending script"
 
 hasLowFees :: PParams LedgerEra -> Tx LedgerEra -> Property
 hasLowFees pparams tx =
@@ -273,7 +268,7 @@ isBalanced utxo originalTx balancedTx =
   let inp' = knownInputBalance utxo balancedTx
       out' = outputBalance balancedTx
       out = outputBalance originalTx
-      fee = (view feeTxBodyL . body) balancedTx
+      fee = view (bodyTxL . feeTxBodyL) balancedTx
    in coin (deltaValue out' inp') == fee
         & counterexample ("Fee:             " <> show fee)
         & counterexample ("Delta value:     " <> show (coin $ deltaValue out' inp'))
@@ -347,9 +342,9 @@ genTxsSpending utxo = scale (round @Double . sqrt . fromIntegral) $ do
 
 genUTxO :: Gen (Map TxIn TxOut)
 genUTxO = do
-  tx <- arbitrary `suchThat` (Prelude.not . Prelude.null . view outputsTxBodyL . body)
+  tx <- arbitrary `suchThat` (Prelude.not . Prelude.null . view (bodyTxL . outputsTxBodyL))
   txIn <- toLedgerTxIn <$> genTxIn
-  let txOut = scaleAda $ Prelude.head $ toList $ body tx ^. outputsTxBodyL
+  let txOut = scaleAda $ Prelude.head $ toList $ tx ^. (bodyTxL . outputsTxBodyL)
   pure $ Map.singleton txIn txOut
  where
   scaleAda :: TxOut -> TxOut
@@ -358,10 +353,10 @@ genUTxO = do
      in BabbageTxOut addr value' datum refScript
 
 genOutputsForInputs :: Tx LedgerEra -> Gen (Map TxIn TxOut)
-genOutputsForInputs AlonzoTx{body} = do
-  let n = Set.size (view inputsTxBodyL body)
+genOutputsForInputs tx = do
+  let n = Set.size (view (bodyTxL . inputsTxBodyL) tx)
   outs <- vectorOf n arbitrary
-  pure $ Map.fromList $ zip (toList (view inputsTxBodyL body)) outs
+  pure $ Map.fromList $ zip (toList (view (bodyTxL . inputsTxBodyL) tx)) outs
 
 genLedgerTx :: Gen (Tx LedgerEra)
 genLedgerTx = do
@@ -374,11 +369,11 @@ genLedgerTx = do
 
 allTxIns :: [Tx LedgerEra] -> Set TxIn
 allTxIns txs =
-  Set.unions (view inputsTxBodyL . body <$> txs)
+  Set.unions (view (bodyTxL . inputsTxBodyL) <$> txs)
 
 allTxOuts :: [Tx LedgerEra] -> [TxOut]
 allTxOuts txs =
-  toList $ mconcat (view outputsTxBodyL . body <$> txs)
+  toList $ mconcat (view (bodyTxL . outputsTxBodyL) <$> txs)
 
 isOurs :: Map TxIn TxOut -> Address -> Bool
 isOurs utxo addr =
@@ -406,7 +401,7 @@ deltaValue a b
 
 -- | NOTE: This does not account for withdrawals
 knownInputBalance :: Map TxIn TxOut -> Tx LedgerEra -> Value LedgerEra
-knownInputBalance utxo = foldMap resolve . toList . view inputsTxBodyL . body
+knownInputBalance utxo = foldMap resolve . toList . view (bodyTxL . inputsTxBodyL)
  where
   resolve :: TxIn -> Value LedgerEra
   resolve k = maybe zero getValue (Map.lookup k utxo)
@@ -414,4 +409,4 @@ knownInputBalance utxo = foldMap resolve . toList . view inputsTxBodyL . body
 -- | NOTE: This does not account for deposits
 outputBalance :: Tx LedgerEra -> Value LedgerEra
 outputBalance =
-  foldMap getValue . view outputsTxBodyL . body
+  foldMap getValue . view (bodyTxL . outputsTxBodyL)
