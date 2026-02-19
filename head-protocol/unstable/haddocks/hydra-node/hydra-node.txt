@@ -387,18 +387,17 @@ QueryProtocolParamsEraNotSupported :: AnyCardanoEra -> QueryException
 QueryProtocolParamsEncodingFailureOnEra :: AnyCardanoEra -> Text -> QueryException
 QueryEraNotInCardanoModeFailure :: AnyCardanoEra -> QueryException
 QueryNotShelleyBasedEraException :: AnyCardanoEra -> QueryException
-QueryNotConwayEraOnwardsException :: AnyCardanoEra -> QueryException
 
 -- | Handle interface for abstract querying of a cardano node.
 data CardanoClient
-CardanoClient :: ([Address ShelleyAddr] -> IO UTxO) -> NetworkId -> CardanoClient
-[$sel:queryUTxOByAddress:CardanoClient] :: CardanoClient -> [Address ShelleyAddr] -> IO UTxO
+CardanoClient :: ([Address ShelleyAddr] -> IO (UTxO ConwayEra)) -> NetworkId -> CardanoClient
+[$sel:queryUTxOByAddress:CardanoClient] :: CardanoClient -> [Address ShelleyAddr] -> IO (UTxO ConwayEra)
 [$sel:networkId:CardanoClient] :: CardanoClient -> NetworkId
 
 -- | Submit a (signed) transaction to the node.
 --   
 --   Throws <a>SubmitTransactionException</a> if submission fails.
-submitTransaction :: NetworkId -> SocketPath -> Tx -> IO ()
+submitTransaction :: LocalNodeConnectInfo -> Tx -> IO ()
 
 -- | Exceptions that <tt>can</tt> occur during a transaction submission.
 --   
@@ -416,7 +415,7 @@ SubmitTxValidationError :: TxValidationErrorInCardanoMode -> SubmitTransactionEx
 --   
 --   Note that this function loops forever; hence, one probably wants to
 --   couple it with a surrounding timeout.
-awaitTransaction :: NetworkId -> SocketPath -> Tx -> IO UTxO
+awaitTransaction :: IsShelleyBasedEra era => LocalNodeConnectInfo -> Tx -> IO (UTxO era)
 
 -- | Describes whether to query at the tip or at a specific point.
 data QueryPoint
@@ -424,75 +423,67 @@ QueryTip :: QueryPoint
 QueryAt :: ChainPoint -> QueryPoint
 
 -- | Query the latest chain point aka "the tip".
-queryTip :: NetworkId -> SocketPath -> IO ChainPoint
+queryTip :: LocalNodeConnectInfo -> IO ChainPoint
 
 -- | Query the system start parameter at given point.
 --   
 --   Throws at least <a>QueryException</a> if query fails.
-querySystemStart :: NetworkId -> SocketPath -> QueryPoint -> IO SystemStart
+querySystemStart :: LocalNodeConnectInfo -> QueryPoint -> IO SystemStart
 
 -- | Query the era history at given point.
 --   
 --   Throws at least <a>QueryException</a> if query fails.
-queryEraHistory :: NetworkId -> SocketPath -> QueryPoint -> IO EraHistory
+queryEraHistory :: LocalNodeConnectInfo -> QueryPoint -> IO EraHistory
 
 -- | Query the current epoch number.
 --   
 --   Throws at least <a>QueryException</a> if query fails.
-queryEpochNo :: NetworkId -> SocketPath -> QueryPoint -> IO EpochNo
+queryEpochNo :: LocalNodeConnectInfo -> QueryPoint -> IO EpochNo
 
 -- | Query the protocol parameters at given point and convert them to
 --   Babbage era protocol parameters.
 --   
 --   Throws at least <a>QueryException</a> if query fails.
-queryProtocolParameters :: NetworkId -> SocketPath -> QueryPoint -> IO (PParams LedgerEra)
+queryProtocolParameters :: LocalNodeConnectInfo -> QueryPoint -> IO (PParams LedgerEra)
 
 -- | Query <a>GenesisParameters</a> at a given point.
 --   
 --   Throws at least <a>QueryException</a> if query fails.
-queryGenesisParameters :: NetworkId -> SocketPath -> QueryPoint -> IO (GenesisParameters ShelleyEra)
+queryGenesisParameters :: LocalNodeConnectInfo -> QueryPoint -> IO (GenesisParameters ShelleyEra)
 
 -- | Query UTxO for all given addresses at given point.
 --   
 --   Throws at least <a>QueryException</a> if query fails.
-queryUTxO :: NetworkId -> SocketPath -> QueryPoint -> [Address ShelleyAddr] -> IO UTxO
-queryUTxOExpr :: ConwayEraOnwards era -> [Address ShelleyAddr] -> LocalStateQueryExpr b p QueryInMode r IO UTxO
+queryUTxO :: IsShelleyBasedEra era => LocalNodeConnectInfo -> QueryPoint -> [Address ShelleyAddr] -> IO (UTxO era)
 
 -- | Query UTxO for given tx inputs at given point.
 --   
 --   Throws at least <a>QueryException</a> if query fails.
-queryUTxOByTxIn :: NetworkId -> SocketPath -> QueryPoint -> [TxIn] -> IO UTxO
+queryUTxOByTxIn :: IsShelleyBasedEra era => LocalNodeConnectInfo -> QueryPoint -> [TxIn] -> IO (UTxO era)
 queryForCurrentEraInEonExpr :: Eon eon => (AnyCardanoEra -> IO a) -> (forall era. eon era -> LocalStateQueryExpr b p QueryInMode r IO a) -> LocalStateQueryExpr b p QueryInMode r IO a
 queryForCurrentEraInShelleyBasedEraExpr :: (forall era. ShelleyBasedEra era -> LocalStateQueryExpr b p QueryInMode r IO a) -> LocalStateQueryExpr b p QueryInMode r IO a
-queryForCurrentEraInConwayEraOnwardsExpr :: Eon eon => (forall era. eon era -> LocalStateQueryExpr b p QueryInMode r IO a) -> LocalStateQueryExpr b p QueryInMode r IO a
 
 -- | Query the whole UTxO from node at given point. Useful for debugging,
 --   but should obviously not be used in production code.
 --   
 --   Throws at least <a>QueryException</a> if query fails.
-queryUTxOWhole :: NetworkId -> SocketPath -> QueryPoint -> IO UTxO
+queryUTxOWhole :: IsShelleyBasedEra era => LocalNodeConnectInfo -> QueryPoint -> IO (UTxO era)
 
 -- | Query UTxO for the address of given verification key at point.
 --   
 --   Throws at least <a>QueryException</a> if query fails.
-queryUTxOFor :: NetworkId -> SocketPath -> QueryPoint -> VerificationKey PaymentKey -> IO UTxO
+queryUTxOFor :: IsShelleyBasedEra era => LocalNodeConnectInfo -> QueryPoint -> VerificationKey PaymentKey -> IO (UTxO era)
 
 -- | Query the current set of registered stake pools.
 --   
 --   Throws at least <a>QueryException</a> if query fails.
-queryStakePools :: NetworkId -> SocketPath -> QueryPoint -> IO (Set PoolId)
+queryStakePools :: LocalNodeConnectInfo -> QueryPoint -> IO (Set PoolId)
 
 -- | Monadic query expression to get current era.
 queryCurrentEraExpr :: LocalStateQueryExpr b p QueryInMode r IO AnyCardanoEra
 
--- | Monadic query expression for a <a>QueryInShelleyBasedEra</a>.
-queryInShelleyBasedEraExpr :: ShelleyBasedEra era -> QueryInShelleyBasedEra era a -> LocalStateQueryExpr b p QueryInMode r IO a
-
 -- | Throws at least <a>QueryException</a> if query fails.
-runQuery :: NetworkId -> SocketPath -> QueryPoint -> QueryInMode a -> IO a
-
--- | Throws at least <a>QueryException</a> if query fails.
-runQueryExpr :: NetworkId -> SocketPath -> QueryPoint -> LocalStateQueryExpr BlockInMode ChainPoint QueryInMode () IO a -> IO a
+runQueryExpr :: LocalNodeConnectInfo -> QueryPoint -> LocalStateQueryExpr BlockInMode ChainPoint QueryInMode () IO a -> IO a
 throwOnEraMismatch :: MonadThrow m => Either EraMismatch a -> m a
 throwOnUnsupportedNtcVersion :: MonadThrow m => Either UnsupportedNtcVersionError a -> m a
 localNodeConnectInfo :: NetworkId -> SocketPath -> LocalNodeConnectInfo
@@ -1317,6 +1308,9 @@ ErrScriptExecutionFailed :: Text -> Text -> ErrCoverFee
 [$sel:scriptFailure:ErrNotEnoughFunds] :: ErrCoverFee -> Text
 ErrTranslationError :: ContextError LedgerEra -> ErrCoverFee
 ErrConwayUpgradeError :: TxUpgradeError ConwayEra -> ErrCoverFee
+ErrMissingScript :: Text -> Text -> ErrCoverFee
+[$sel:scriptHash:ErrNotEnoughFunds] :: ErrCoverFee -> Text
+[$sel:purpose:ErrNotEnoughFunds] :: ErrCoverFee -> Text
 data ChangeError
 ChangeError :: Coin -> Coin -> ChangeError
 [$sel:inputBalance:ChangeError] :: ChangeError -> Coin
@@ -2236,6 +2230,11 @@ RejectedInputBecauseUnsynced :: ClientInput tx -> NominalDiffTime -> ClientMessa
 SideLoadSnapshotRejected :: ClientInput tx -> SideLoadRequirementFailure tx -> ClientMessage tx
 [$sel:clientInput:CommandFailed] :: ClientMessage tx -> ClientInput tx
 [$sel:requirementFailure:CommandFailed] :: ClientMessage tx -> SideLoadRequirementFailure tx
+SyncedStatusReport :: ChainSlot -> UTCTime -> NominalDiffTime -> SyncedStatus -> ClientMessage tx
+[$sel:chainSlot:CommandFailed] :: ClientMessage tx -> ChainSlot
+[$sel:chainTime:CommandFailed] :: ClientMessage tx -> UTCTime
+[$sel:drift:CommandFailed] :: ClientMessage tx -> NominalDiffTime
+[$sel:synced:CommandFailed] :: ClientMessage tx -> SyncedStatus
 
 -- | A friendly welcome message which tells a client something about the
 --   node. Currently used for knowing what signing key the server uses (it
@@ -3122,6 +3121,12 @@ handleChainInput :: IsChainState tx => Environment -> Ledger tx -> UTCTime -> Ch
 handleClientInput :: IsChainState tx => Environment -> Ledger tx -> ChainPointTime -> PendingDeposits tx -> HeadState tx -> Input tx -> Outcome tx
 handleNetworkInput :: IsChainState tx => Environment -> Ledger tx -> ChainPointTime -> PendingDeposits tx -> HeadState tx -> Input tx -> Outcome tx
 onConnectionEvent :: Text -> Connectivity -> Outcome tx
+
+-- | Convert any SeenSnapshot to LastSeenSnapshot, preserving the correct
+--   snapshot number. Used by CommitFinalized and DecommitFinalized to
+--   handle race conditions where on-chain transaction confirmation happens
+--   before AckSn messages arrive.
+toLastSeenSnapshot :: SeenSnapshot tx -> SeenSnapshot tx
 
 -- | Inputs that are processed by the head logic (the "core").
 --   Corresponding to each of the "shell" layers, we distinguish between
@@ -4259,6 +4264,15 @@ prepareTxToPost :: forall m. (MonadSTM m, MonadThrow (STM m)) => TimeHandle -> T
 --   parameter and epoch length result in a short horizon, this is
 --   problematic.
 maxGraceTime :: NominalDiffTime
+data StartingDecision
+FromProvided :: ChainPoint -> StartingDecision
+FromTip :: ChainPoint -> StartingDecision
+FromPersisted :: ChainPoint -> Bool -> StartingDecision
+[$sel:chainPoint:FromProvided] :: StartingDecision -> ChainPoint
+
+-- | Whether the user-provided --start-chain-from point was set but
+--   ignored, because it was older than persisted points.
+[$sel:startChainFromSet:FromProvided] :: StartingDecision -> Bool
 data CardanoChainLog
 ToPost :: PostChainTx Tx -> CardanoChainLog
 [$sel:toPost:ToPost] :: CardanoChainLog -> PostChainTx Tx
@@ -4275,9 +4289,15 @@ RolledForward :: ChainPoint -> [TxId] -> CardanoChainLog
 RolledBackward :: ChainPoint -> CardanoChainLog
 [$sel:point:ToPost] :: CardanoChainLog -> ChainPoint
 Wallet :: TinyWalletLog -> CardanoChainLog
+StartingChainDecision :: StartingDecision -> CardanoChainLog
 instance GHC.Exception.Type.Exception Hydra.Chain.Direct.Handlers.TimeConversionException
 instance GHC.Show.Show Hydra.Chain.Direct.Handlers.TimeConversionException
 instance GHC.Classes.Eq Hydra.Chain.Direct.Handlers.TimeConversionException
+instance Data.Aeson.Types.FromJSON.FromJSON Hydra.Chain.Direct.Handlers.StartingDecision
+instance Data.Aeson.Types.ToJSON.ToJSON Hydra.Chain.Direct.Handlers.StartingDecision
+instance GHC.Generics.Generic Hydra.Chain.Direct.Handlers.StartingDecision
+instance GHC.Show.Show Hydra.Chain.Direct.Handlers.StartingDecision
+instance GHC.Classes.Eq Hydra.Chain.Direct.Handlers.StartingDecision
 instance Data.Aeson.Types.FromJSON.FromJSON Hydra.Chain.Direct.Handlers.CardanoChainLog
 instance Data.Aeson.Types.ToJSON.ToJSON Hydra.Chain.Direct.Handlers.CardanoChainLog
 instance GHC.Generics.Generic Hydra.Chain.Direct.Handlers.CardanoChainLog
@@ -4532,6 +4552,8 @@ LoadingState :: HydraNodeLog tx
 LoadedState :: Last EventId -> NodeState tx -> HydraNodeLog tx
 [$sel:lastEventId:BeginInput] :: HydraNodeLog tx -> Last EventId
 [$sel:nodeState:BeginInput] :: HydraNodeLog tx -> NodeState tx
+LoadedChainState :: ChainPointType tx -> HydraNodeLog tx
+[$sel:lastKnownChainPoint:BeginInput] :: HydraNodeLog tx -> ChainPointType tx
 ReplayingState :: HydraNodeLog tx
 Misconfiguration :: [ParamMismatch] -> HydraNodeLog tx
 [$sel:misconfigurationErrors:BeginInput] :: HydraNodeLog tx -> [ParamMismatch]
@@ -4564,6 +4586,9 @@ NodeOptions :: RunOptions -> HydraLog tx
 Persistence :: PersistenceLog -> HydraLog tx
 [$sel:persistenceLog:DirectChain] :: HydraLog tx -> PersistenceLog
 EnteringMainloop :: HydraLog tx
+NodeHydrated :: HydraLog tx
+ChainBackendStarted :: HydraLog tx
+NetworkStarted :: HydraLog tx
 instance GHC.Generics.Generic (Hydra.Logging.Messages.HydraLog tx)
 instance GHC.Classes.Eq (Hydra.Node.HydraNodeLog tx) => GHC.Classes.Eq (Hydra.Logging.Messages.HydraLog tx)
 instance GHC.Show.Show (Hydra.Node.HydraNodeLog tx) => GHC.Show.Show (Hydra.Logging.Messages.HydraLog tx)
