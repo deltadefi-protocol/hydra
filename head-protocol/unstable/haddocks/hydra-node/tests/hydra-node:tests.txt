@@ -275,6 +275,7 @@ getState :: MonadState (StepState tx) m => m (NodeState tx)
 --   <a>runHeadLogic</a> monad forward.
 step :: (MonadState (StepState tx) m, IsChainState tx, MonadTime m) => Input tx -> m (Outcome tx)
 hasEffect :: (HasCallStack, IsChainState tx) => Outcome tx -> Effect tx -> IO ()
+shouldNotHaveEffect :: (HasCallStack, IsChainState tx) => Outcome tx -> Effect tx -> IO ()
 assertWait :: (HasCallStack, IsChainState tx) => Outcome tx -> WaitReason tx -> IO ()
 hasEffectSatisfying :: (HasCallStack, IsChainState tx) => Outcome tx -> (Effect tx -> Bool) -> IO ()
 hasNoEffectSatisfying :: (HasCallStack, IsChainState tx) => Outcome tx -> (Effect tx -> Bool) -> IO ()
