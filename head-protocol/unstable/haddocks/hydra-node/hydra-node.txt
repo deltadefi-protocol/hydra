@@ -2950,7 +2950,7 @@ onOpenNetworkReqTx :: IsTx tx => Environment -> Ledger tx -> ChainSlot -> OpenSt
 -- | Skip a decommit transaction if it was already posted in a previous
 --   snapshot. This prevents including the same decommit in multiple
 --   snapshot requests.
-skipPostedDecommit :: IsTx tx => Maybe tx -> Maybe (UTxOType tx) -> Maybe tx
+skipPostedDecommit :: IsTx tx => Snapshot tx -> Maybe tx -> Maybe tx
 
 -- | Skip a deposit if it was already posted in a previous snapshot. This
 --   prevents including the same deposit in multiple snapshot requests.

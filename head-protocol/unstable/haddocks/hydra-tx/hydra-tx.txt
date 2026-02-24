@@ -400,6 +400,10 @@ txSpendingUTxO :: IsTx tx => UTxOType tx -> tx
 -- | Get the UTxO produced by given transaction.
 utxoFromTx :: IsTx tx => tx -> UTxOType tx
 
+-- | Resolve transaction inputs against a UTxO set. Returns the subset of
+--   the UTxO that the transaction consumes.
+resolveInputsUTxO :: IsTx tx => UTxOType tx -> tx -> UTxOType tx
+
 -- | Get only the outputs in given UTxO.
 outputsOfUTxO :: IsTx tx => UTxOType tx -> [TxOutType tx]
 
