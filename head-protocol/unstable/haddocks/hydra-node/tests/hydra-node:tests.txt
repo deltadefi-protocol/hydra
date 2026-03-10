@@ -4,7 +4,7 @@
 
 -- | The Hydra node
 @package hydra-node:tests
-@version 1.2.0
+@version 1.3.0
 
 module Hydra.API.ClientInputSpec
 spec :: Spec
@@ -298,6 +298,21 @@ module Hydra.HeadLogicSnapshotSpec
 spec :: Spec
 prop_singleMemberHeadAlwaysSnapshotOnReqTx :: ConfirmedSnapshot SimpleTx -> Property
 prop_thereIsAlwaysALeader :: Property
+
+-- | When the leader is in <a>RequestedSnapshot</a> state (sent ReqSn but
+--   not yet received its own network echo to sign it), the timer must be a
+--   noop. Re-broadcasting here would use stale state (e.g.
+--   <a>$sel:currentDepositTxId:CoordinatedHeadState</a> is not set until
+--   the echo is processed) and race with the original ReqSn, causing peers
+--   to collect signatures on different snapshot contents.
+prop_timerIsNoopInRequestedSnapshotState :: SnapshotNumber -> SnapshotNumber -> Property
+
+-- | When a <a>SeenSnapshot</a> is in-flight (partial signatures being
+--   collected), the timer re-broadcasts the snapshot using the in-flight
+--   snapshot's version and number — not the speculatively-computed
+--   <tt>nextSn</tt>. This ensures all parties sign the same snapshot
+--   content after a re-broadcast.
+prop_timerSeenSnapshotRebroadcastMatchesInFlight :: Property
 
 module Hydra.API.HTTPServerSpec
 dummyStatePath :: FilePath
@@ -638,14 +653,49 @@ dummySimulatedChainNetwork :: SimulatedChainNetwork tx m
 --   network has a block time of 20 (simulated) seconds.
 withSimulatedChainAndNetwork :: (MonadTime m, MonadDelay m, MonadAsync m, MonadThrow m, MonadLabelledSTM m) => (SimulatedChainNetwork SimpleTx m -> m a) -> m a
 
+-- | Like <a>withSimulatedChainAndNetwork</a> but configured so that in
+--   this test setup network messages take longer to arrive than it takes
+--   for a chain transaction to confirm. This means a chain event (like
+--   DecommitFinalized bumping the version) can reach all nodes before a
+--   snapshot request that was sent just before it, exposing the version
+--   race condition in the snapshot protocol.
+withRaceConditionSimulation :: (MonadTime m, MonadDelay m, MonadAsync m, MonadThrow m, MonadLabelledSTM m) => (SimulatedChainNetwork SimpleTx m -> m a) -> m a
+
+-- | Like <a>withRaceConditionSimulation</a> but with inverted timing:
+--   network messages arrive *before* chain events confirm (networkLatency
+--   &lt; blockTime). This means DecommitFinalized fires while the leader
+--   is actively collecting AckSns (SeenSnapshot state), exposing the
+--   toLastSeenSnapshot SeenSnapshot bug where collapsing SeenSnapshot{N}
+--   to LastSeenSnapshot{N} (instead of LastSeenSnapshot{N-1}) blocks the
+--   timer from re-sending the snapshot request.
+withSeenSnapshotRaceConditionSimulation :: (MonadTime m, MonadDelay m, MonadAsync m, MonadThrow m, MonadLabelledSTM m) => (SimulatedChainNetwork SimpleTx m -> m a) -> m a
+
 -- | Creates a simulated chain and network to which <a>HydraNode</a>s can
 --   be connected to using <a>$sel:connectNode:SimulatedChainNetwork</a>.
 --   NOTE: The <a>$sel:tickThread:SimulatedChainNetwork</a> needs to be
 --   <a>cancel</a>ed after use. Use <a>withSimulatedChainAndNetwork</a>
 --   instead where possible.
 simulatedChainAndNetwork :: forall m. (MonadTime m, MonadDelay m, MonadAsync m, MonadLabelledSTM m) => ChainStateType SimpleTx -> m (SimulatedChainNetwork SimpleTx m)
+
+-- | Like <a>simulatedChainAndNetwork</a> but with configurable block time
+--   and network delivery latency. Use <a>withRaceConditionSimulation</a>
+--   to expose version races where chain events confirm before network
+--   messages arrive.
+simulatedChainAndNetworkWith :: forall m. (MonadTime m, MonadDelay m, MonadAsync m, MonadLabelledSTM m) => ChainStateType SimpleTx -> DiffTime -> DiffTime -> m (SimulatedChainNetwork SimpleTx m)
 handleChainEvent :: HydraNode tx m -> ChainEvent tx -> m ()
 createMockNetwork :: MonadSTM m => DraftHydraNode tx m -> TVar m [HydraNode tx m] -> Network m (Message tx)
+
+-- | Like <a>createMockNetwork</a> but delivers messages after a
+--   configurable delay. When latency &gt; 0, messages are delivered
+--   asynchronously so chain events can arrive before network messages,
+--   exposing version race conditions.
+createMockNetworkWithLatency :: (MonadAsync m, MonadDelay m) => DiffTime -> DraftHydraNode tx m -> TVar m [HydraNode tx m] -> Network m (Message tx)
+
+-- | Compute a deduplication key for chain transactions where only the
+--   first posting should result in a chain event (first wins, like the
+--   real chain). Returns empty string for transactions that should always
+--   fire (no dedup).
+chainTxDedupKey :: PostChainTx tx -> String
 
 -- | Derive an <a>OnChainTx</a> from <a>PostChainTx</a> to simulate a
 --   "perfect" chain. NOTE: This implementation announces hard-coded
@@ -660,6 +710,7 @@ createTestHydraClient :: MonadSTM m => TQueue m (ServerOutput tx) -> TQueue m (C
 createHydraNode :: (IsChainState tx, MonadDelay m, MonadAsync m, MonadLabelledSTM m, MonadThrow m) => Tracer m (HydraNodeLog tx) -> Ledger tx -> ChainStateType tx -> SigningKey HydraKey -> [Party] -> TQueue m (ServerOutput tx) -> TQueue m (ClientMessage tx) -> TVar m [ServerOutput tx] -> SimulatedChainNetwork tx m -> ContestationPeriod -> DepositPeriod -> m (HydraNode tx m)
 openHead :: SimulatedChainNetwork SimpleTx (IOSim s) -> TestHydraClient SimpleTx (IOSim s) -> IOSim s ()
 openHead2 :: SimulatedChainNetwork SimpleTx (IOSim s) -> TestHydraClient SimpleTx (IOSim s) -> TestHydraClient SimpleTx (IOSim s) -> IOSim s ()
+openHead3 :: SimulatedChainNetwork SimpleTx (IOSim s) -> TestHydraClient SimpleTx (IOSim s) -> TestHydraClient SimpleTx (IOSim s) -> TestHydraClient SimpleTx (IOSim s) -> IOSim s ()
 assertHeadIsClosed :: (HasCallStack, MonadThrow m) => ServerOutput tx -> m ()
 assertHeadIsClosedWith :: (HasCallStack, MonadThrow m) => SnapshotNumber -> ServerOutput tx -> m ()
 
