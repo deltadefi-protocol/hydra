@@ -312,7 +312,7 @@ prop_timerIsNoopInRequestedSnapshotState :: SnapshotNumber -> SnapshotNumber -> 
 --   snapshot's version and number — not the speculatively-computed
 --   <tt>nextSn</tt>. This ensures all parties sign the same snapshot
 --   content after a re-broadcast.
-prop_timerSeenSnapshotRebroadcastMatchesInFlight :: Property
+prop_timerIsNoopInSeenSnapshotState :: Property
 
 module Hydra.API.HTTPServerSpec
 dummyStatePath :: FilePath
