@@ -1703,11 +1703,6 @@ NetworkInput :: TTL -> NetworkEvent (Message tx) -> Input tx
 -- | Input received from the chain via a <a>Hydra.Chain</a>.
 ChainInput :: ChainEvent tx -> Input tx
 [$sel:chainEvent:ClientInput] :: Input tx -> ChainEvent tx
-
--- | Periodic timer tick used to drive the snapshot leader to retry sending
---   a <tt>ReqSn</tt> when a previous request was rejected due to a version
---   mismatch.
-TimerInput :: Input tx
 instance GHC.Generics.Generic (Hydra.HeadLogic.Input.Input tx)
 instance Hydra.Chain.ChainState.IsChainState tx => GHC.Classes.Eq (Hydra.HeadLogic.Input.Input tx)
 instance Hydra.Chain.ChainState.IsChainState tx => GHC.Show.Show (Hydra.HeadLogic.Input.Input tx)
@@ -1996,37 +1991,16 @@ module Hydra.Node.InputQueue
 --   "fed". NOTE(SN): handle pattern, but likely not required as there is
 --   no need for an alternative implementation
 data InputQueue m e
-InputQueue :: (e -> m ()) -> (e -> m Bool) -> (e -> m Bool) -> (DiffTime -> Queued e -> m ()) -> (m () -> m ()) -> m (Queued e) -> m Bool -> InputQueue m e
+InputQueue :: (e -> m ()) -> (DiffTime -> Queued e -> m ()) -> m (Queued e) -> m Bool -> InputQueue m e
 [$sel:enqueue:InputQueue] :: InputQueue m e -> e -> m ()
-
--- | Non-blocking, coalescing variant of <a>$sel:enqueue:InputQueue</a> for
---   periodic/timer inputs. Returns <a>False</a> (drops the item) if the
---   queue is full OR if the last enqueued item was also via
---   <a>$sel:tryEnqueue:InputQueue</a>. The latter ensures at most one
---   timer tick is ever pending: consecutive ticks carry no new
---   information, and keeping only one prevents timer ticks from crowding
---   out chain/network events. The coalescing resets whenever
---   <a>$sel:enqueue:InputQueue</a> is called.
-[$sel:tryEnqueue:InputQueue] :: InputQueue m e -> e -> m Bool
-
--- | Non-blocking variant for client-submitted inputs (e.g.
---   <tt>NewTx</tt>). Returns <a>False</a> if the queue is full (back
---   pressure signal); <a>True</a> if the item was enqueued. Unlike
---   <a>$sel:tryEnqueue:InputQueue</a>, does NOT coalesce consecutive calls
---   — every invocation is independent.
-[$sel:tryEnqueueClient:InputQueue] :: InputQueue m e -> e -> m Bool
 [$sel:reenqueue:InputQueue] :: InputQueue m e -> DiffTime -> Queued e -> m ()
-
--- | Run an action asynchronously. Use this for background work that will
---   eventually <a>$sel:enqueue:InputQueue</a> an item.
-[$sel:asyncTracked:InputQueue] :: InputQueue m e -> m () -> m ()
 [$sel:dequeue:InputQueue] :: InputQueue m e -> m (Queued e)
 [$sel:isEmpty:InputQueue] :: InputQueue m e -> m Bool
 data Queued a
 Queued :: Word64 -> a -> Queued a
 [$sel:queuedId:Queued] :: Queued a -> Word64
 [$sel:queuedItem:Queued] :: Queued a -> a
-createInputQueue :: (MonadDelay m, MonadAsync m, MonadLabelledSTM m, MonadThrow m) => m (InputQueue m e)
+createInputQueue :: (MonadDelay m, MonadAsync m, MonadLabelledSTM m) => m (InputQueue m e)
 
 
 -- | Concrete <a>Network</a> stack used in a hydra-node.
@@ -2246,7 +2220,7 @@ instance GHC.Real.Integral Hydra.Node.UnsyncedPeriod.UnsyncedPeriod
 
 module Hydra.Node.Environment
 data Environment
-Environment :: Party -> SigningKey HydraKey -> [Party] -> [OnChainId] -> ContestationPeriod -> DepositPeriod -> UnsyncedPeriod -> NominalDiffTime -> Text -> Environment
+Environment :: Party -> SigningKey HydraKey -> [Party] -> [OnChainId] -> ContestationPeriod -> DepositPeriod -> UnsyncedPeriod -> Text -> Environment
 
 -- | This is the p_i from the paper
 [$sel:party:Environment] :: Environment -> Party
@@ -2260,11 +2234,6 @@ Environment :: Party -> SigningKey HydraKey -> [Party] -> [OnChainId] -> Contest
 --   the chain. Beyond this period the node will refuse to process new
 --   transactions and signing snapshots.
 [$sel:unsyncedPeriod:Environment] :: Environment -> UnsyncedPeriod
-
--- | How often the snapshot leader retries sending a ReqSn after a version
---   mismatch. Should be shorter than the chain block time so stale
---   requests are corrected quickly.
-[$sel:snapshotRetryInterval:Environment] :: Environment -> NominalDiffTime
 
 -- | Configured peers for the network layer, used for comparison on etcd
 --   errors.
@@ -2636,14 +2605,6 @@ TransactionAppliedToLocalUTxO :: HeadId -> tx -> UTxOType tx -> StateChanged tx
 SnapshotRequestDecided :: SnapshotNumber -> StateChanged tx
 [$sel:snapshotNumber:NetworkConnected] :: StateChanged tx -> SnapshotNumber
 
--- | The leader's own ReqSn echo failed validation (e.g. stale decommit or
---   expired deposit). Resets <tt>seenSnapshot</tt> back to
---   <tt>LastSeenSnapshot</tt> so the timer can retry with fresh content
---   instead of being stuck forever.
-SnapshotRequestAborted :: SnapshotNumber -> SnapshotNumber -> StateChanged tx
-[$sel:snapshotNumber:NetworkConnected] :: StateChanged tx -> SnapshotNumber
-[$sel:lastSeenSnapshotNumber:NetworkConnected] :: StateChanged tx -> SnapshotNumber
-
 -- | A snapshot was requested by some party. NOTE: We deliberately already
 --   include an updated local ledger state to not need a ledger to
 --   interpret this event.
@@ -2737,9 +2698,6 @@ TxInvalid :: HeadId -> UTxOType tx -> tx -> ValidationError -> StateChanged tx
 [$sel:utxo:NetworkConnected] :: StateChanged tx -> UTxOType tx
 [$sel:transaction:NetworkConnected] :: StateChanged tx -> tx
 [$sel:validationError:NetworkConnected] :: StateChanged tx -> ValidationError
-TxsRequeued :: [tx] -> UTxOType tx -> StateChanged tx
-[$sel:txs:NetworkConnected] :: StateChanged tx -> [tx]
-[$sel:newLocalUTxO:NetworkConnected] :: StateChanged tx -> UTxOType tx
 LocalStateCleared :: HeadId -> SnapshotNumber -> StateChanged tx
 [$sel:headId:NetworkConnected] :: StateChanged tx -> HeadId
 [$sel:snapshotNumber:NetworkConnected] :: StateChanged tx -> SnapshotNumber
@@ -2777,6 +2735,11 @@ changes :: [StateChanged tx] -> Outcome tx
 data WaitReason tx
 WaitOnNotApplicableTx :: ValidationError -> WaitReason tx
 [$sel:validationError:WaitOnNotApplicableTx] :: WaitReason tx -> ValidationError
+WaitOnSnapshotNumber :: SnapshotNumber -> WaitReason tx
+[$sel:waitingForNumber:WaitOnNotApplicableTx] :: WaitReason tx -> SnapshotNumber
+WaitOnSnapshotVersion :: SnapshotVersion -> WaitReason tx
+[$sel:waitingForVersion:WaitOnNotApplicableTx] :: WaitReason tx -> SnapshotVersion
+WaitOnSeenSnapshot :: WaitReason tx
 WaitOnTxs :: [TxIdType tx] -> WaitReason tx
 [$sel:waitingForTxIds:WaitOnNotApplicableTx] :: WaitReason tx -> [TxIdType tx]
 WaitOnContestationDeadline :: WaitReason tx
@@ -2884,7 +2847,7 @@ HeadInitializationDetails :: UTCTime -> SlotNo -> HeadInitializationDetails
 jsonContent :: ResponseHeaders
 
 -- | Hydra HTTP server
-httpApp :: forall tx. IsChainState tx => Tracer IO APIServerLog -> Chain tx IO -> Environment -> FilePath -> PParams LedgerEra -> IO (NodeState tx) -> IO CommitInfo -> IO [TxIdType tx] -> (ClientInput tx -> IO ()) -> (tx -> IO Bool) -> ApiTransactionTimeout -> TChan (Either (TimedServerOutput tx) (ClientMessage tx)) -> Application
+httpApp :: forall tx. IsChainState tx => Tracer IO APIServerLog -> Chain tx IO -> Environment -> FilePath -> PParams LedgerEra -> IO (NodeState tx) -> IO CommitInfo -> IO [TxIdType tx] -> (ClientInput tx -> IO ()) -> ApiTransactionTimeout -> TChan (Either (TimedServerOutput tx) (ClientMessage tx)) -> Application
 
 -- | Handle request to obtain a draft commit tx.
 handleDraftCommitUtxo :: forall tx. IsChainState tx => Tracer IO APIServerLog -> Environment -> PParams LedgerEra -> Chain tx IO -> IO CommitInfo -> ByteString -> IO Response
@@ -2900,7 +2863,7 @@ handleDecommit :: forall tx. FromJSON tx => (ClientInput tx -> IO ()) -> ApiTran
 handleSideLoadSnapshot :: forall tx. IsChainState tx => (ClientInput tx -> IO ()) -> ApiTransactionTimeout -> TChan (Either (TimedServerOutput tx) (ClientMessage tx)) -> ByteString -> IO Response
 
 -- | Handle request to submit a transaction to the head.
-handleSubmitL2Tx :: forall tx. IsChainState tx => (tx -> IO Bool) -> ApiTransactionTimeout -> TChan (Either (TimedServerOutput tx) (ClientMessage tx)) -> ByteString -> IO Response
+handleSubmitL2Tx :: forall tx. IsChainState tx => (ClientInput tx -> IO ()) -> ApiTransactionTimeout -> TChan (Either (TimedServerOutput tx) (ClientMessage tx)) -> ByteString -> IO Response
 handleHeadInitializationTime :: MonadUnliftIO m => FilePath -> m Response
 parseInitializingTime :: MonadUnliftIO m => ConduitT ByteString Void m [Text]
 badRequest :: IsChainState tx => PostTxError tx -> Response
@@ -2968,18 +2931,8 @@ aggregateNodeState :: IsChainState tx => NodeState tx -> StateChanged tx -> Node
 
 -- | Maximum number of transaction ids per snapshot. This effectively
 --   limits our "block size" and ensures it does not grow arbitrarily with
---   the backlog of pending transactions (localTxs).
---   
---   Overflow transactions (those beyond this limit) are NOT dropped — they
---   survive in <a>$sel:localTxs:CoordinatedHeadState</a> after
---   <a>SnapshotRequested</a> (via <tt>pruneTransactions</tt>) and are
---   automatically batched into the next snapshot when the timer fires.
---   Raising this value increases the number of txs confirmed per snapshot
---   round at the cost of larger messages and longer ledger validation per
---   round.
---   
---   TODO: Investigate what a good value is for this, in relation to memory
---   usage and ledger validation throughput.
+--   the backlog of pending transactions (localTxs). TODO: Investigate what
+--   a good value is for this, in relation to memory usage
 maxTxsPerSnapshot :: Int
 aggregateChainStateHistory :: IsChainState tx => ChainStateHistory tx -> StateChanged tx -> ChainStateHistory tx
 aggregateState :: IsChainState tx => NodeState tx -> Outcome tx -> NodeState tx
@@ -3043,13 +2996,6 @@ onOpenClientNewTx :: tx -> Outcome tx
 --   <b>Transition</b>: <a>OpenState</a> → <a>OpenState</a>
 onOpenNetworkReqTx :: IsTx tx => Environment -> Ledger tx -> ChainSlot -> OpenState tx -> TTL -> PendingDeposits tx -> tx -> Outcome tx
 
--- | Check if we can request a new snapshot. Returns True (blocks the
---   request) if: - The requested snapshot number has already been
---   confirmed (sn &lt;= lastSeen) - OR any snapshot is currently in-flight
---   (RequestedSnapshot/SeenSnapshot states) This ensures sequential
---   snapshot processing and prevents duplicate requests.
-snapshotInFlight :: SeenSnapshot tx -> SnapshotNumber -> Bool
-
 -- | Validate whether a current deposit in the local state actually exists
 --   in the map of pending deposits.
 --   
@@ -3066,15 +3012,6 @@ snapshotInFlight :: SeenSnapshot tx -> SnapshotNumber -> Bool
 --   requested in <a>ReqSn</a> is indeed still pending and has not been
 --   processed or removed.
 setExistingDeposit :: IsTx tx => PendingDeposits tx -> Maybe (TxIdType tx) -> Maybe (TxIdType tx)
-
--- | Skip a decommit transaction if it was already posted in a previous
---   snapshot. This prevents including the same decommit in multiple
---   snapshot requests.
-skipPostedDecommit :: IsTx tx => Snapshot tx -> Maybe tx -> Maybe tx
-
--- | Skip a deposit if it was already posted in a previous snapshot. This
---   prevents including the same deposit in multiple snapshot requests.
-skipPostedDeposit :: IsTx tx => PendingDeposits tx -> Maybe (TxIdType tx) -> Maybe (UTxOType tx) -> Maybe (TxIdType tx)
 
 -- | Process a snapshot request (<a>ReqSn</a>) from party.
 --   
@@ -3146,30 +3083,16 @@ onChainTick :: IsTx tx => Environment -> PendingDeposits tx -> UTCTime -> Outcom
 --   request snapshots for inclusion.
 onOpenChainTick :: IsTx tx => Environment -> UTCTime -> PendingDeposits tx -> OpenState tx -> Outcome tx
 
--- | Re-apply pending transactions against the confirmed UTxO after a
---   version bump (DecommitFinalized or CommitFinalized). Any txs that were
---   in-flight in a SeenSnapshot or RequestedSnapshot are re-validated:
---   valid ones are emitted as <a>TxsRequeued</a> (so the next snapshot
---   picks them up); invalid ones are emitted as <a>TxInvalid</a> (so
---   clients and the event log know they were dropped).
---   
---   Returns two outcomes to be combined around the version-bump state
---   change: - preRecovery: <a>TxInvalid</a> events for txs that can no
---   longer be applied - postRecovery: <a>TxsRequeued</a> event with valid
---   txs and the new localUTxO
---   
---   Both are <a>noop</a> when no snapshot is in-flight (NoSeenSnapshot /
---   LastSeenSnapshot), preserving the existing no-op behaviour in those
---   cases.
-recoverSnapshotTxs :: Ledger tx -> ChainSlot -> HeadId -> CoordinatedHeadState tx -> (Outcome tx, Outcome tx)
-
 -- | Observe a increment transaction. If the outputs match the ones of the
 --   pending commit UTxO, then we consider the deposit/increment finalized,
 --   and remove the increment UTxO from
 --   <a>$sel:pendingDeposits:NodeInSync</a> from the local state.
 --   
+--   Finally, if the client observing happens to be the leader, then a new
+--   ReqSn is broadcasted.
+--   
 --   <b>Transition</b>: <a>OpenState</a> → <a>OpenState</a>
-onOpenChainIncrementTx :: IsTx tx => Ledger tx -> ChainSlot -> OpenState tx -> ChainStateType tx -> SnapshotVersion -> TxIdType tx -> Outcome tx
+onOpenChainIncrementTx :: IsTx tx => Environment -> OpenState tx -> ChainStateType tx -> SnapshotVersion -> TxIdType tx -> Outcome tx
 
 -- | Observe a decrement transaction. If the outputs match the ones of the
 --   pending decommit tx, then we consider the decommit finalized, and
@@ -3179,7 +3102,7 @@ onOpenChainIncrementTx :: IsTx tx => Ledger tx -> ChainSlot -> OpenState tx -> C
 --   ReqSn is broadcasted.
 --   
 --   <b>Transition</b>: <a>OpenState</a> → <a>OpenState</a>
-onOpenChainDecrementTx :: IsTx tx => Ledger tx -> ChainSlot -> OpenState tx -> ChainStateType tx -> SnapshotVersion -> UTxOType tx -> Outcome tx
+onOpenChainDecrementTx :: IsTx tx => Environment -> PendingDeposits tx -> OpenState tx -> ChainStateType tx -> SnapshotVersion -> UTxOType tx -> Outcome tx
 
 -- | On rollback, re-post the IncrementTx if there is a pending deposit
 --   whose confirmed snapshot contains a matching utxoToCommit. The
@@ -3192,11 +3115,6 @@ maybeRepostIncrementTx :: IsTx tx => HeadId -> HeadParameters -> PendingDeposits
 --   rollback may have erased the original on-chain DecrementTx
 --   observation.
 maybeRepostDecrementTx :: HeadId -> HeadParameters -> Maybe tx -> ConfirmedSnapshot tx -> Outcome tx
-
--- | Get the last confirmed snapshot number. This returns the snapshot
---   number that has been fully confirmed and finalized, NOT in-flight
---   snapshots. Used to calculate the next snapshot to request.
-latestSeenSnapshotNumber :: SeenSnapshot tx -> SnapshotNumber
 
 -- | Client request to close the head. This leads to a close transaction on
 --   chain using the latest confirmed snaphshot of the <a>OpenState</a>.
@@ -3254,39 +3172,7 @@ updateInSyncHead :: IsChainState tx => Environment -> Ledger tx -> UTCTime -> Ch
 handleChainInput :: IsChainState tx => Environment -> Ledger tx -> UTCTime -> ChainPointTime -> PendingDeposits tx -> HeadState tx -> Input tx -> SyncedStatus -> Outcome tx
 handleClientInput :: IsChainState tx => Environment -> Ledger tx -> ChainPointTime -> PendingDeposits tx -> HeadState tx -> Input tx -> Outcome tx
 handleNetworkInput :: IsChainState tx => Environment -> Ledger tx -> ChainPointTime -> PendingDeposits tx -> HeadState tx -> Input tx -> Outcome tx
-
--- | Handle a periodic timer tick when the head is <a>Open</a>.
---   
---   Sends a fresh <a>ReqSn</a> if this node is the snapshot leader for the
---   next snapshot, there is pending work (transactions, a decommit, or a
---   deposit), and no snapshot is currently in flight
---   (<a>LastSeenSnapshot</a> or <a>NoSeenSnapshot</a> state). All other
---   states are no-ops:
---   
---   <ul>
---   <li><a>RequestedSnapshot</a>: we already sent <a>ReqSn</a> and are
---   waiting for the network echo before we can sign; re-sending would use
---   stale state and produce a different snapshot content, causing
---   signature mismatches.</li>
---   <li><a>SeenSnapshot</a>: signatures are being collected; the network
---   layer guarantees delivery, so there is nothing to retry.</li>
---   </ul>
-onOpenTimer :: IsTx tx => Environment -> PendingDeposits tx -> OpenState tx -> Outcome tx
 onConnectionEvent :: Text -> Connectivity -> Outcome tx
-
--- | Convert any SeenSnapshot to LastSeenSnapshot, resetting to the last
---   *confirmed* snapshot number. Used by CommitFinalized and
---   DecommitFinalized to unblock the snapshot protocol after a version
---   bump so the timer can re-send a fresh ReqSn with the updated version.
---   
---   Both in-flight cases must reset to the confirmed number so that
---   <a>snapshotInFlight</a> returns False and the timer can proceed: *
---   RequestedSnapshot{lastSeen} — no AckSns yet, reset to lastSeen
---   (confirmed) * SeenSnapshot{number} — collecting AckSns for N, reset to
---   N-1 (confirmed)
---   
---   Stale AckSns for the collapsed request will expire via TTL.
-toLastSeenSnapshot :: SeenSnapshot tx -> SeenSnapshot tx
 
 -- | Inputs that are processed by the head logic (the "core").
 --   Corresponding to each of the "shell" layers, we distinguish between
@@ -3311,11 +3197,6 @@ NetworkInput :: TTL -> NetworkEvent (Message tx) -> Input tx
 -- | Input received from the chain via a <a>Hydra.Chain</a>.
 ChainInput :: ChainEvent tx -> Input tx
 [$sel:chainEvent:ClientInput] :: Input tx -> ChainEvent tx
-
--- | Periodic timer tick used to drive the snapshot leader to retry sending
---   a <tt>ReqSn</tt> when a previous request was rejected due to a version
---   mismatch.
-TimerInput :: Input tx
 type TTL = Natural
 data SideLoadRequirementFailure tx
 SideLoadInitialSnapshotMismatch :: SideLoadRequirementFailure tx
@@ -3590,14 +3471,6 @@ TransactionAppliedToLocalUTxO :: HeadId -> tx -> UTxOType tx -> StateChanged tx
 SnapshotRequestDecided :: SnapshotNumber -> StateChanged tx
 [$sel:snapshotNumber:NetworkConnected] :: StateChanged tx -> SnapshotNumber
 
--- | The leader's own ReqSn echo failed validation (e.g. stale decommit or
---   expired deposit). Resets <tt>seenSnapshot</tt> back to
---   <tt>LastSeenSnapshot</tt> so the timer can retry with fresh content
---   instead of being stuck forever.
-SnapshotRequestAborted :: SnapshotNumber -> SnapshotNumber -> StateChanged tx
-[$sel:snapshotNumber:NetworkConnected] :: StateChanged tx -> SnapshotNumber
-[$sel:lastSeenSnapshotNumber:NetworkConnected] :: StateChanged tx -> SnapshotNumber
-
 -- | A snapshot was requested by some party. NOTE: We deliberately already
 --   include an updated local ledger state to not need a ledger to
 --   interpret this event.
@@ -3691,9 +3564,6 @@ TxInvalid :: HeadId -> UTxOType tx -> tx -> ValidationError -> StateChanged tx
 [$sel:utxo:NetworkConnected] :: StateChanged tx -> UTxOType tx
 [$sel:transaction:NetworkConnected] :: StateChanged tx -> tx
 [$sel:validationError:NetworkConnected] :: StateChanged tx -> ValidationError
-TxsRequeued :: [tx] -> UTxOType tx -> StateChanged tx
-[$sel:txs:NetworkConnected] :: StateChanged tx -> [tx]
-[$sel:newLocalUTxO:NetworkConnected] :: StateChanged tx -> UTxOType tx
 LocalStateCleared :: HeadId -> SnapshotNumber -> StateChanged tx
 [$sel:headId:NetworkConnected] :: StateChanged tx -> HeadId
 [$sel:snapshotNumber:NetworkConnected] :: StateChanged tx -> SnapshotNumber
@@ -3710,6 +3580,11 @@ NodeSynced :: ChainSlot -> UTCTime -> NominalDiffTime -> StateChanged tx
 data WaitReason tx
 WaitOnNotApplicableTx :: ValidationError -> WaitReason tx
 [$sel:validationError:WaitOnNotApplicableTx] :: WaitReason tx -> ValidationError
+WaitOnSnapshotNumber :: SnapshotNumber -> WaitReason tx
+[$sel:waitingForNumber:WaitOnNotApplicableTx] :: WaitReason tx -> SnapshotNumber
+WaitOnSnapshotVersion :: SnapshotVersion -> WaitReason tx
+[$sel:waitingForVersion:WaitOnNotApplicableTx] :: WaitReason tx -> SnapshotVersion
+WaitOnSeenSnapshot :: WaitReason tx
 WaitOnTxs :: [TxIdType tx] -> WaitReason tx
 [$sel:waitingForTxIds:WaitOnNotApplicableTx] :: WaitReason tx -> [TxIdType tx]
 WaitOnContestationDeadline :: WaitReason tx
@@ -3869,7 +3744,7 @@ OfflineChainConfig :: HeadSeed -> FilePath -> Maybe FilePath -> OfflineChainConf
 --   offline-mode chain.
 [$sel:ledgerGenesisFile:OfflineChainConfig] :: OfflineChainConfig -> Maybe FilePath
 data RunOptions
-RunOptions :: Verbosity -> NodeId -> Host -> Maybe Host -> [Host] -> IP -> PortNumber -> Maybe FilePath -> Maybe FilePath -> Maybe PortNumber -> FilePath -> [FilePath] -> FilePath -> Maybe (Positive Natural) -> ChainConfig -> LedgerConfig -> WhichEtcd -> ApiTransactionTimeout -> NominalDiffTime -> RunOptions
+RunOptions :: Verbosity -> NodeId -> Host -> Maybe Host -> [Host] -> IP -> PortNumber -> Maybe FilePath -> Maybe FilePath -> Maybe PortNumber -> FilePath -> [FilePath] -> FilePath -> Maybe (Positive Natural) -> ChainConfig -> LedgerConfig -> WhichEtcd -> ApiTransactionTimeout -> RunOptions
 [$sel:verbosity:RunOptions] :: RunOptions -> Verbosity
 [$sel:nodeId:RunOptions] :: RunOptions -> NodeId
 [$sel:listen:RunOptions] :: RunOptions -> Host
@@ -3888,10 +3763,6 @@ RunOptions :: Verbosity -> NodeId -> Host -> Maybe Host -> [Host] -> IP -> PortN
 [$sel:ledgerConfig:RunOptions] :: RunOptions -> LedgerConfig
 [$sel:whichEtcd:RunOptions] :: RunOptions -> WhichEtcd
 [$sel:apiTransactionTimeout:RunOptions] :: RunOptions -> ApiTransactionTimeout
-
--- | How often the snapshot leader retries sending a ReqSn. Defaults to 5
---   milliseconds (0.005s).
-[$sel:snapshotRetryInterval:RunOptions] :: RunOptions -> NominalDiffTime
 data ChainConfig
 Offline :: OfflineChainConfig -> ChainConfig
 Cardano :: CardanoChainConfig -> ChainConfig
@@ -3966,9 +3837,6 @@ cardanoSigningKeyFileParser :: Parser FilePath
 defaultRunOptions :: RunOptions
 defaultCardanoChainConfig :: CardanoChainConfig
 defaultLedgerConfig :: LedgerConfig
-
--- | Default snapshot retry interval: 5 milliseconds.
-defaultSnapshotRetryInterval :: NominalDiffTime
 verbosityParser :: Parser Verbosity
 nodeIdParser :: Parser NodeId
 listenParser :: Parser Host
@@ -3987,7 +3855,6 @@ chainConfigParser :: Parser ChainConfig
 ledgerConfigParser :: Parser LedgerConfig
 whichEtcdParser :: Parser WhichEtcd
 apiTransactionTimeoutParser :: Parser ApiTransactionTimeout
-snapshotRetryIntervalParser :: Parser NominalDiffTime
 cardanoChainConfigParser :: Parser CardanoChainConfig
 offlineChainConfigParser :: Parser OfflineChainConfig
 networkIdParser :: Parser NetworkId
@@ -4521,7 +4388,7 @@ chainSyncClient :: forall m. (MonadSTM m, MonadThrow m) => ChainSyncHandler m ->
 -- | Run a <tt>CardanoNode</tt> action against the given network/socket
 --   using the Conway era witness.
 runNodeIO :: NetworkId -> SocketPath -> CardanoNode ShelleyBasedEra Era a -> IO a
-txSubmissionClient :: forall m. MonadSTM m => Tracer m CardanoChainLog -> TQueue m (Tx, TMVar m (Maybe (PostTxError Tx))) -> LocalTxSubmissionClient TxInMode TxValidationErrorInCardanoMode m ()
+txSubmissionClient :: forall m. (MonadSTM m, MonadDelay m) => Tracer m CardanoChainLog -> TQueue m (Tx, TMVar m (Maybe (PostTxError Tx))) -> LocalTxSubmissionClient TxInMode TxValidationErrorInCardanoMode m ()
 instance GHC.Show.Show Hydra.Chain.Direct.DirectBackend
 instance GHC.Classes.Eq Hydra.Chain.Direct.DirectBackend
 instance GHC.Show.Show Hydra.Chain.Direct.DirectConnectException
@@ -4571,7 +4438,7 @@ loadChainContext :: forall backend. ChainBackend backend => backend -> CardanoCh
 mkTinyWallet :: forall backend. ChainBackend backend => backend -> Tracer IO CardanoChainLog -> CardanoChainConfig -> IO (TinyWallet IO)
 
 module Hydra.API.WSServer
-wsApp :: forall tx. IsChainState tx => Environment -> Party -> Tracer IO APIServerLog -> Chain tx IO -> ConduitT () (TimedServerOutput tx) (ResourceT IO) () -> (ClientInput tx -> IO ()) -> (ClientInput tx -> IO Bool) -> Projection STM (StateChanged tx) (NodeState tx) -> Projection STM (StateChanged tx) NetworkInfo -> TChan (Either (TimedServerOutput tx) (ClientMessage tx)) -> ServerOutputFilter tx -> PendingConnection -> IO ()
+wsApp :: forall tx. IsChainState tx => Environment -> Party -> Tracer IO APIServerLog -> Chain tx IO -> ConduitT () (TimedServerOutput tx) (ResourceT IO) () -> (ClientInput tx -> IO ()) -> Projection STM (StateChanged tx) (NodeState tx) -> Projection STM (StateChanged tx) NetworkInfo -> TChan (Either (TimedServerOutput tx) (ClientMessage tx)) -> ServerOutputFilter tx -> PendingConnection -> IO ()
 
 module Hydra.API.Server
 
@@ -4588,7 +4455,7 @@ APIServerConfig :: IP -> PortNumber -> Maybe FilePath -> Maybe FilePath -> ApiTr
 [$sel:tlsCertPath:APIServerConfig] :: APIServerConfig -> Maybe FilePath
 [$sel:tlsKeyPath:APIServerConfig] :: APIServerConfig -> Maybe FilePath
 [$sel:apiTransactionTimeout:APIServerConfig] :: APIServerConfig -> ApiTransactionTimeout
-withAPIServer :: forall tx. IsChainState tx => APIServerConfig -> Environment -> FilePath -> Party -> EventSource (StateEvent tx) IO -> Tracer IO APIServerLog -> ChainStateType tx -> Chain tx IO -> PParams LedgerEra -> ServerOutputFilter tx -> (ClientInput tx -> IO ()) -> (ClientInput tx -> IO Bool) -> ((EventSink (StateEvent tx) IO, Server tx IO) -> IO ()) -> IO ()
+withAPIServer :: forall tx. IsChainState tx => APIServerConfig -> Environment -> FilePath -> Party -> EventSource (StateEvent tx) IO -> Tracer IO APIServerLog -> ChainStateType tx -> Chain tx IO -> PParams LedgerEra -> ServerOutputFilter tx -> (ClientInput tx -> IO ()) -> ((EventSink (StateEvent tx) IO, Server tx IO) -> IO ()) -> IO ()
 
 -- | An <a>IOException</a> with more <a>IP</a> and <a>PortNumber</a> added
 --   as context.
@@ -4657,7 +4524,6 @@ DraftHydraNode :: Tracer m (HydraNodeLog tx) -> Environment -> Ledger tx -> Node
 hydrate :: (IsChainState tx, MonadDelay m, MonadLabelledSTM m, MonadAsync m, MonadThrow m, MonadUnliftIO m) => Tracer m (HydraNodeLog tx) -> Environment -> Ledger tx -> ChainStateType tx -> EventStore (StateEvent tx) m -> [EventSink (StateEvent tx) m] -> m (DraftHydraNode tx m)
 wireChainInput :: DraftHydraNode tx m -> ChainEvent tx -> m ()
 wireClientInput :: DraftHydraNode tx m -> ClientInput tx -> m ()
-tryWireClientInput :: DraftHydraNode tx m -> ClientInput tx -> m Bool
 wireNetworkInput :: DraftHydraNode tx m -> NetworkCallback (Authenticated (Message tx)) m
 
 -- | Create a network input with corresponding default ttl from given
@@ -4681,7 +4547,7 @@ HydraNode :: Tracer m (HydraNodeLog tx) -> Environment -> Ledger tx -> NodeState
 [$sel:oc:HydraNode] :: HydraNode tx m -> Chain tx m
 [$sel:hn:HydraNode] :: HydraNode tx m -> Network m (Message tx)
 [$sel:server:HydraNode] :: HydraNode tx m -> Server tx m
-runHydraNode :: (MonadCatch m, MonadAsync m, MonadDelay m, MonadTime m, IsChainState tx) => HydraNode tx m -> m ()
+runHydraNode :: (MonadCatch m, MonadAsync m, MonadTime m, IsChainState tx) => HydraNode tx m -> m ()
 stepHydraNode :: (MonadCatch m, MonadAsync m, MonadTime m, IsChainState tx) => UTCTime -> HydraNode tx m -> m ()
 
 -- | The maximum number of times to re-enqueue a network messages upon
