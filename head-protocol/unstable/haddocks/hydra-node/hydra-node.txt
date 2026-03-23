@@ -2999,22 +2999,16 @@ onOpenClientNewTx :: tx -> Outcome tx
 --   <b>Transition</b>: <a>OpenState</a> → <a>OpenState</a>
 onOpenNetworkReqTx :: IsTx tx => Environment -> Ledger tx -> ChainSlot -> OpenState tx -> TTL -> PendingDeposits tx -> tx -> Outcome tx
 
--- | Validate whether a current deposit in the local state actually exists
---   in the map of pending deposits.
+-- | Select the deposit to include in the next snapshot.
 --   
---   <ul>
---   <li>If <tt>currentDeposit</tt> is <a>Nothing</a>, returns
---   <a>Nothing</a>.</li>
---   <li>If <tt>currentDeposit</tt> is <tt><a>Just</a> txId</tt> and
---   <tt>txId</tt> is present in <a>$sel:pendingDeposits:NodeInSync</a>,
---   returns the original <tt>currentDeposit</tt>.</li>
---   <li>Otherwise, returns <a>Nothing</a>.</li>
---   </ul>
---   
---   This is typically used to confirm that a local deposit that is to be
---   requested in <a>ReqSn</a> is indeed still pending and has not been
---   processed or removed.
-setExistingDeposit :: IsTx tx => PendingDeposits tx -> Maybe (TxIdType tx) -> Maybe (TxIdType tx)
+--   Prefers a deposit already tracked in
+--   <a>$sel:currentDepositTxId:CoordinatedHeadState</a> (if still
+--   pending). Falls back to the oldest active deposit from
+--   <a>$sel:pendingDeposits:NodeInSync</a>, but only when neither a
+--   decommit is pending nor the last confirmed snapshot already included a
+--   deposit (to avoid double-posting <a>IncrementTx</a> before
+--   <a>CommitFinalized</a> removes the deposit).
+selectNextDeposit :: IsTx tx => PendingDeposits tx -> Maybe (TxIdType tx) -> Maybe tx -> Maybe (UTxOType tx) -> Maybe (TxIdType tx)
 
 -- | Process a snapshot request (<a>ReqSn</a>) from party.
 --   
@@ -3107,6 +3101,23 @@ onOpenChainIncrementTx :: IsTx tx => Environment -> OpenState tx -> ChainStateTy
 --   <b>Transition</b>: <a>OpenState</a> → <a>OpenState</a>
 onOpenChainDecrementTx :: IsTx tx => Environment -> PendingDeposits tx -> OpenState tx -> ChainStateType tx -> SnapshotVersion -> UTxOType tx -> Outcome tx
 
+-- | Validate whether a current deposit in the local state actually exists
+--   in the map of pending deposits.
+--   
+--   <ul>
+--   <li>If <tt>currentDeposit</tt> is <a>Nothing</a>, returns
+--   <a>Nothing</a>.</li>
+--   <li>If <tt>currentDeposit</tt> is <tt><a>Just</a> txId</tt> and
+--   <tt>txId</tt> is present in <a>$sel:pendingDeposits:NodeInSync</a>,
+--   returns the original <tt>currentDeposit</tt>.</li>
+--   <li>Otherwise, returns <a>Nothing</a>.</li>
+--   </ul>
+--   
+--   This is typically used to confirm that a local deposit that is to be
+--   requested in <a>ReqSn</a> is indeed still pending and has not been
+--   processed or removed.
+setExistingDeposit :: IsTx tx => PendingDeposits tx -> Maybe (TxIdType tx) -> Maybe (TxIdType tx)
+
 -- | On rollback, re-post the IncrementTx if there is a pending deposit
 --   whose confirmed snapshot contains a matching utxoToCommit. The
 --   rollback may have erased the original on-chain IncrementTx
@@ -3170,6 +3181,12 @@ onClosedChainFanoutTx :: ClosedState tx -> ChainStateType tx -> UTxOType tx -> O
 -- | Detect our view of the chain going out of sync and issue a
 --   <a>NodeUnsynced</a> event when this is the case.
 handleOutOfSync :: IsChainState tx => Environment -> UTCTime -> ChainPointType tx -> UTCTime -> SyncedStatus -> Outcome tx
+
+-- | Find the oldest non-empty active deposit, if any. Deposits are
+--   selected in FIFO order by their <a>StateChanged</a> timestamp. This
+--   mirrors the selection logic in <tt>withNextActive</tt> used by
+--   <a>onOpenChainTick</a>.
+nextActiveDepositId :: IsTx tx => PendingDeposits tx -> Maybe (TxIdType tx)
 updateCatchingUpHead :: IsChainState tx => Environment -> Ledger tx -> UTCTime -> ChainPointTime -> PendingDeposits tx -> HeadState tx -> Input tx -> SyncedStatus -> Outcome tx
 updateInSyncHead :: IsChainState tx => Environment -> Ledger tx -> UTCTime -> ChainPointTime -> PendingDeposits tx -> HeadState tx -> Input tx -> SyncedStatus -> Outcome tx
 handleChainInput :: IsChainState tx => Environment -> Ledger tx -> UTCTime -> ChainPointTime -> PendingDeposits tx -> HeadState tx -> Input tx -> SyncedStatus -> Outcome tx
