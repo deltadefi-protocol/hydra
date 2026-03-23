@@ -726,6 +726,9 @@ SeenSnapshot :: Snapshot tx -> Map Party (Signature (Snapshot tx)) -> SeenSnapsh
 -- | Get the last seen snapshot number given a <a>SeenSnapshot</a>.
 seenSnapshotNumber :: SeenSnapshot tx -> SnapshotNumber
 
+-- | Whether a snapshot is currently in-flight (requested or being signed).
+snapshotInFlight :: SeenSnapshot tx -> Bool
+
 -- | An <a>Closed</a> head with an current candidate
 --   <a>ConfirmedSnapshot</a>, which may be contested before the
 --   <a>$sel:contestationDeadline:ClosedState</a>.
@@ -3391,6 +3394,9 @@ seenSnapshotNumber :: SeenSnapshot tx -> SnapshotNumber
 
 -- | Update the chain state in any <a>HeadState</a>.
 setChainState :: ChainStateType tx -> HeadState tx -> HeadState tx
+
+-- | Whether a snapshot is currently in-flight (requested or being signed).
+snapshotInFlight :: SeenSnapshot tx -> Bool
 
 -- | Analogous to inputs, the pure head logic "core" can have effects
 --   emitted to the "shell" layers and we distinguish the same: effects
