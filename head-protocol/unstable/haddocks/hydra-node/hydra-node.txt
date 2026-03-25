@@ -729,6 +729,12 @@ seenSnapshotNumber :: SeenSnapshot tx -> SnapshotNumber
 -- | Whether a snapshot is currently in-flight (requested or being signed).
 snapshotInFlight :: SeenSnapshot tx -> Bool
 
+-- | Whether AckSns are currently being collected for a snapshot. Unlike
+--   <a>snapshotInFlight</a>, returns False for <a>RequestedSnapshot</a> —
+--   a snapshot sent but not yet echoed is stale once the version bumps and
+--   should not block a fresh request with the new version.
+isCollectingAcks :: SeenSnapshot tx -> Bool
+
 -- | An <a>Closed</a> head with an current candidate
 --   <a>ConfirmedSnapshot</a>, which may be contested before the
 --   <a>$sel:contestationDeadline:ClosedState</a>.
@@ -3405,6 +3411,12 @@ type PendingCommits = Set Party
 
 -- | Get the chain state in any <a>HeadState</a>.
 getChainState :: HeadState tx -> ChainStateType tx
+
+-- | Whether AckSns are currently being collected for a snapshot. Unlike
+--   <a>snapshotInFlight</a>, returns False for <a>RequestedSnapshot</a> —
+--   a snapshot sent but not yet echoed is stale once the version bumps and
+--   should not block a fresh request with the new version.
+isCollectingAcks :: SeenSnapshot tx -> Bool
 
 -- | Get the last seen snapshot number given a <a>SeenSnapshot</a>.
 seenSnapshotNumber :: SeenSnapshot tx -> SnapshotNumber
