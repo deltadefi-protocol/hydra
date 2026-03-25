@@ -245,6 +245,57 @@ spec =
             NetworkEffect ReqSn{depositTxId} -> depositTxId == Just 1
             _ -> False
 
+        it "deposit activated while snapshot in-flight is picked up by next chained snapshot" $ do
+          -- Regression: a deposit that becomes Active while a snapshot is in-flight
+          -- (so the tick cannot request a snapshot for it) must be included in the
+          -- next chained ReqSn once the in-flight snapshot confirms.
+          --
+          -- After DepositActivated is aggregated the deposit sits in pendingDeposits
+          -- with status=Active, but currentDepositTxId stays Nothing (the bug).
+          -- When maybeRequestNextSnapshot fires it calls
+          --   setExistingDeposit pendingDeposits Nothing = Nothing
+          -- so the deposit is silently dropped from every subsequent ReqSn.
+          now <- getCurrentTime
+          let
+            depositId = 999
+            deposit =
+              Deposit
+                { headId = testHeadId
+                , deposited = utxoRef 50
+                , created = now
+                , deadline = addUTCTime 3600 now
+                , status = Active
+                }
+            -- Single-party head: alice is always leader, so maybeRequestNextSnapshot
+            -- fires for sn=2 when she receives her own AckSn for sn=1.
+            singleParty = [alice]
+            -- sn=1 in SeenSnapshot — no deposit was included (activated too late).
+            snapshot1 = testSnapshot 1 0 [] mempty
+            -- Pending L2 tx ensures not (null localTxs) → maybeRequestNextSnapshot fires.
+            tx2 = aValidTx 2
+            -- State as it would be after DepositActivated was processed:
+            -- pendingDeposits has the Active deposit, currentDepositTxId is still Nothing.
+            s0 =
+              ( inOpenState' singleParty $
+                  coordinatedHeadState
+                    { seenSnapshot = SeenSnapshot{snapshot = snapshot1, signatories = Map.empty}
+                    , localTxs = [tx2]
+                    , currentDepositTxId = Nothing
+                    }
+              )
+                { pendingDeposits = Map.singleton depositId deposit
+                }
+
+          -- Alice's AckSn confirms sn=1; maybeRequestNextSnapshot fires for sn=2.
+          now' <- nowFromSlot s0.chainPointTime.currentSlot
+          let ackSn = receiveMessageFrom alice $ AckSn (sign aliceSk snapshot1) 1
+          let outcome = update aliceEnv ledger now' s0 ackSn
+
+          -- The chained ReqSn for sn=2 must include the active deposit.
+          outcome `hasEffectSatisfying` \case
+            NetworkEffect ReqSn{depositTxId} -> depositTxId == Just depositId
+            _ -> False
+
       describe "Decommit" $ do
         it "observes DecommitRecorded and ReqDec in an Open state" $ do
           let outputs = utxoRef 1
@@ -379,13 +430,14 @@ spec =
           let s1 = aggregateState s0 decommitFinalizedOutcome
 
           -- Verify seenSnapshot was reset (not stuck as RequestedSnapshot)
-          -- After DecommitFinalized, lastSeen should be the snapshot number that
-          -- included the decommit (snapshot 1), not the previously confirmed snapshot (0).
-          -- This prevents incoming AckSn messages for snapshot 1 from being requeued infinitely.
+          -- After DecommitFinalized, seenSnapshot resets to LastSeenSnapshot{lastSeen=confirmedSn}.
+          -- This allows maybeRequestSnapshotAfterDecommit to fire a fresh ReqSn immediately.
+          -- NOTE: localUTxO is already correct at this point — DecommitRecorded removed the
+          -- decommit outputs from localUTxO when ReqDec was first processed, before ReqSn was sent.
           case s1 of
             NodeInSync{headState = Open OpenState{coordinatedHeadState = chs}} -> do
               chs.version `shouldBe` 4
-              chs.seenSnapshot `shouldBe` LastSeenSnapshot{lastSeen = 1}
+              chs.seenSnapshot `shouldBe` LastSeenSnapshot{lastSeen = 0}
               chs.decommitTx `shouldBe` Nothing
             _ -> fail "expected Open state"
 
@@ -414,7 +466,7 @@ spec =
                 _ -> False
             _ -> fail "expected Open state"
 
-        it "DecommitFinalized with RequestedSnapshot uses requested number not lastSeen" $ do
+        it "DecommitFinalized with RequestedSnapshot resets seenSnapshot to confirmedSn" $ do
           let localUTxO = utxoRefs [1]
               confirmedSn =
                 ConfirmedSnapshot
@@ -438,11 +490,11 @@ spec =
           let decommitFinalizedOutcome = update aliceEnv ledger now s0 decrementObservation
           let s1 = aggregateState s0 decommitFinalizedOutcome
 
-          -- Verify seenSnapshot uses requested (1), not lastSeen (0)
+          -- Verify seenSnapshot resets to confirmedSn (0), regardless of requested (1)
           case s1 of
             NodeInSync{headState = Open OpenState{coordinatedHeadState = chs}} -> do
               chs.version `shouldBe` 4
-              chs.seenSnapshot `shouldBe` LastSeenSnapshot{lastSeen = 1}
+              chs.seenSnapshot `shouldBe` LastSeenSnapshot{lastSeen = 0}
               chs.decommitTx `shouldBe` Nothing
             _ -> fail "expected Open state"
 
@@ -475,7 +527,7 @@ spec =
             Continue{} -> True
             Error{} -> True
             Wait{} -> False -- Must NOT Wait (infinite AckSn requeue)
-        it "DecommitFinalized with SeenSnapshot state extracts correct snapshot number" $ do
+        it "DecommitFinalized with SeenSnapshot preserves seenSnapshot so AckSns can still be collected" $ do
           let localUTxO = utxoRefs [1]
               decommitTx = SimpleTx 10 mempty (utxoRef 99)
               snapshot1 = testSnapshot 0 3 [] localUTxO & \s -> s{number = 1}
@@ -501,15 +553,86 @@ spec =
           let decommitFinalizedOutcome = update bobEnv ledger now s0 decrementObservation
           let s1 = aggregateState s0 decommitFinalizedOutcome
 
-          -- Verify DecommitFinalized correctly extracted snapshot number from SeenSnapshot
+          -- DecommitFinalized preserves SeenSnapshot so AckSns can still be collected.
+          -- seenSnapshot stays as SeenSnapshot (not reset to LastSeenSnapshot).
           case s1 of
             NodeInSync{headState = Open OpenState{coordinatedHeadState = chs}} -> do
               chs.version `shouldBe` 4
               chs.decommitTx `shouldBe` Nothing
-              chs.seenSnapshot `shouldBe` LastSeenSnapshot{lastSeen = 1}
+              chs.seenSnapshot `shouldBe` SeenSnapshot{snapshot = snapshot1, signatories = mempty}
             _ -> fail "expected Open state"
 
-        it "CommitFinalized with RequestedSnapshot should use requested number not lastSeen" $ do
+        it "DecommitFinalized with SeenSnapshot does not re-request snapshot already in-flight" $ do
+          let localUTxO = utxoRefs [1]
+              decommitTx = SimpleTx 10 mempty (utxoRef 99)
+              snapshot1 = testSnapshot 0 3 [] localUTxO & \s -> s{number = 1}
+              confirmedSn =
+                ConfirmedSnapshot
+                  { snapshot = testSnapshot 0 3 [] localUTxO
+                  , signatures = Crypto.aggregate []
+                  }
+              s0 =
+                inOpenState' threeParties $
+                  coordinatedHeadState
+                    { localUTxO
+                    , version = 3
+                    , confirmedSnapshot = confirmedSn
+                    , seenSnapshot = SeenSnapshot{snapshot = snapshot1, signatories = mempty}
+                    , decommitTx = Just decommitTx
+                    }
+
+          let decrementObservation = observeTx $ OnDecrementTx{headId = testHeadId, newVersion = 4, distributedUTxO = mempty}
+          now <- nowFromSlot s0.chainPointTime.currentSlot
+          let outcome = update aliceEnv ledger now s0 decrementObservation
+
+          -- No new snapshot should be requested: the one in SeenSnapshot will complete
+          outcome `hasNoStateChangedSatisfying` \case
+            SnapshotRequestDecided{} -> True
+            _ -> False
+
+          -- seenSnapshot must be preserved so AckSns can still be collected
+          let s1 = aggregateState s0 outcome
+          case s1 of
+            NodeInSync{headState = Open OpenState{coordinatedHeadState = chs}} ->
+              chs.seenSnapshot `shouldBe` SeenSnapshot{snapshot = snapshot1, signatories = mempty}
+            _ -> fail "expected Open state"
+
+        it "CommitFinalized with SeenSnapshot does not re-request snapshot already in-flight" $ do
+          let localUTxO = utxoRefs [1]
+              snapshot1 = testSnapshot 0 3 [] localUTxO & \s -> s{number = 1}
+              confirmedSn =
+                ConfirmedSnapshot
+                  { snapshot = testSnapshot 0 3 [] localUTxO
+                  , signatures = Crypto.aggregate []
+                  }
+              depositTxId = 42
+              s0 =
+                inOpenState' threeParties $
+                  coordinatedHeadState
+                    { localUTxO
+                    , version = 3
+                    , confirmedSnapshot = confirmedSn
+                    , seenSnapshot = SeenSnapshot{snapshot = snapshot1, signatories = mempty}
+                    , currentDepositTxId = Just depositTxId
+                    }
+
+          let incrementObservation = observeTx $ OnIncrementTx{headId = testHeadId, newVersion = 4, depositTxId}
+          now <- nowFromSlot s0.chainPointTime.currentSlot
+          let outcome = update aliceEnv ledger now s0 incrementObservation
+
+          -- No new snapshot should be requested: the one in SeenSnapshot will complete
+          outcome `hasNoStateChangedSatisfying` \case
+            SnapshotRequestDecided{} -> True
+            _ -> False
+
+          -- seenSnapshot must be preserved so AckSns can still be collected
+          let s1 = aggregateState s0 outcome
+          case s1 of
+            NodeInSync{headState = Open OpenState{coordinatedHeadState = chs}} ->
+              chs.seenSnapshot `shouldBe` SeenSnapshot{snapshot = snapshot1, signatories = mempty}
+            _ -> fail "expected Open state"
+
+        it "CommitFinalized with RequestedSnapshot resets seenSnapshot to confirmedSn" $ do
           let localUTxO = utxoRefs [1]
               confirmedSn =
                 ConfirmedSnapshot
@@ -534,11 +657,12 @@ spec =
           let commitFinalizedOutcome = update aliceEnv ledger now s0 incrementObservation
           let s1 = aggregateState s0 commitFinalizedOutcome
 
+          -- seenSnapshot resets to confirmedSn (0), not requested (1)
           case s1 of
             NodeInSync{headState = Open OpenState{coordinatedHeadState = chs}} -> do
               chs.version `shouldBe` 4
               chs.currentDepositTxId `shouldBe` Nothing
-              chs.seenSnapshot `shouldBe` LastSeenSnapshot{lastSeen = 1}
+              chs.seenSnapshot `shouldBe` LastSeenSnapshot{lastSeen = 0}
             _ -> fail "expected Open state"
 
       describe "Tracks Transaction Ids" $ do
@@ -899,11 +1023,11 @@ spec =
             step tickInput
             getState
 
-          -- Verify deposit is now active and currentDepositTxId is Nothing still
-          -- (it gets set only when ReqSn is processed)
+          -- Verify deposit is now active. DepositActivated queues the deposit
+          -- immediately into currentDepositTxId (via <|> in the aggregate).
           case headState s2 of
             Open OpenState{coordinatedHeadState = CoordinatedHeadState{currentDepositTxId}} ->
-              currentDepositTxId `shouldBe` Nothing
+              currentDepositTxId `shouldBe` Just depositTxId
             other -> expectationFailure $ "Expected Open state, got: " <> show other
 
           -- Step 3: Process ReqSn with the deposit (as if received from network)
